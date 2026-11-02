@@ -8,13 +8,15 @@
 uv sync --extra dev
 ```
 
-faster-whisperのモデルは初回実行時に取得されます。GPUを使わない場合はCLIに`--device cpu`を指定してください。
+faster-whisperのモデルは初回実行時に取得されます。CPUではメモリ使用量を抑えるため、`small`モデルと`int8`を指定してください。
 
 ## 実行
 
 ```powershell
-uv run podcast-preprocessor input.wav output.xml --model small --device cpu --fps 30
+uv run podcast-preprocessor input.wav output.xml --model small --device cpu --compute-type int8 --fps 30
 ```
+
+`turbo`など大きいモデルをCPUで読み込めない場合は、`base`または`tiny`に下げてください。モデルの読み込みに失敗した場合、CLIは利用可能な設定を案内して終了します。
 
 処理は次の順で進みます。
 

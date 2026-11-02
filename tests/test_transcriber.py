@@ -1,0 +1,38 @@
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
+from podcastpreprocessor.transcriber import FasterWhisperTranscriber
+
+
+def test_transcriber_explains_cpu_memory_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    faster_whisper = ModuleType("faster_whisper")
+
+    class FailingWhisperModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("mkl_malloc: failed to allocate memory")
+
+    faster_whisper.WhisperModel = FailingWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+
+    with pytest.raises(RuntimeError, match="--model small --compute-type int8"):
+        FasterWhisperTranscriber("turbo", "cpu", "int8")
+
+
+def test_transcriber_preserves_non_memory_model_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    faster_whisper = ModuleType("faster_whisper")
+
+    class FailingWhisperModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("invalid compute type")
+
+    faster_whisper.WhisperModel = FailingWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+
+    with pytest.raises(RuntimeError, match="invalid compute type"):
+        FasterWhisperTranscriber("small", "cpu", "bad")

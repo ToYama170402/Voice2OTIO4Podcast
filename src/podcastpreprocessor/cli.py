@@ -24,8 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    transcriber = FasterWhisperTranscriber(args.model, args.device, args.compute_type)
-    raw_segments = transcriber.transcribe(args.audio)
+    try:
+        transcriber = FasterWhisperTranscriber(
+            args.model, args.device, args.compute_type
+        )
+        raw_segments = transcriber.transcribe(args.audio)
+    except RuntimeError as error:
+        build_parser().error(str(error))
     process_segments(
         raw_segments, args.audio, args.output, args.fps, args.sequence_name
     )
