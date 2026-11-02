@@ -10,11 +10,37 @@ uv sync --extra dev
 
 faster-whisperのモデルとSudachi辞書は初回セットアップ時に取得されます。CPUではメモリ使用量を抑えるため、`small`モデルと`int8`を指定してください。
 
+SenseVoiceSmall を使用する場合は、追加依存をインストールします。
+
+```powershell
+uv sync --extra dev --extra sensevoice
+```
+
 ## 実行
 
 ```powershell
 uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --model small --device cpu --compute-type int8 --fps 30
 ```
+
+backend は `--backend` で選択できます。既定値は `faster-whisper` です。
+
+```powershell
+uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --device cpu --fps 30
+```
+
+SenseVoice は初回実行時に公式 sherpa-onnx モデルをキャッシュへダウンロードします。CPU では既定の `int8` が推奨です。
+
+```powershell
+uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-quantization int8 --sensevoice-num-threads 8 --sensevoice-chunk-duration-s 30
+```
+
+無音区間を推論しない軽量 VAD を使う場合は `--sensevoice-vad` を追加します。
+
+```powershell
+uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-vad --sensevoice-quantization int8
+```
+
+モデルは通常 `~/.cache/podcastpreprocessor/` に保存されます。ネットワークを使わず既存キャッシュだけで実行する場合は `--offline`、手動配置したモデルを使う場合は `--sensevoice-model` を指定します。長時間音声は既定の30秒チャンクで処理され、メモリが厳しい場合は `--sensevoice-chunk-duration-s 15` のように短くできます。VAD が小さい声を落とす場合は `--sensevoice-vad-threshold-db -50` や `--sensevoice-vad-padding-s 0.4` を試してください。`int4` は公式配布モデルが登録されている場合のみ使用できます。
 
 上記の実行では、指定したOTIOと同じ場所に `podcast.srt` も生成されます。SRTの出力先を変更する場合は `--srt-output` を指定します。
 
@@ -26,7 +52,7 @@ uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --srt-outpu
 
 処理は次の順で進みます。
 
-1. faster-whisperで日本語音声を単語タイムスタンプ付きで認識
+1. 選択した文字起こし backend で日本語音声を単語タイムスタンプ付きで認識
 2. 句読点、文字数、表示時間を基準に字幕を分割
 3. 0.4秒超の無音、フィラー、`no_speech_prob > 0.8`をカット候補として判定
 4. DaVinci Resolve向けのOTIOとSRTを出力
@@ -47,3 +73,5 @@ Whisperモデルなしの固定データ検証は `process_segments` または `
 - `Resolve_OTIO` のリンク動作、ラベル表示、マーカー表示はResolveのバージョンによって実機確認が必要です。
 - 音声は物理的に削除せず、字幕境界に合わせたOTIO上のスライスとして保持します。
 - 異なるサンプルレートやチャンネル数の音声をミックス・変換する処理は行いません。
+- 文字起こし backend は `RawSegment` と単語タイムスタンプを返す必要があります。単語タイムスタンプを返せない SenseVoice 推論経路は利用できません。
+- SenseVoiceSmall の依存は `uv sync --extra sensevoice` で追加します。モデルは sherpa-onnx の公式 release から取得し、SHA256 を検証します。モデルのライセンスと取得条件は配布元を確認してください。

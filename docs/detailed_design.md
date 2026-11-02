@@ -7,7 +7,7 @@
              │
              ▼
 ┌───────────────────────────────────────┐
-│  1. Transcriber                       │ Faster-Whisper / OpenAI-Whisper
+│  1. Transcriber                       │ faster-whisper / SenseVoiceSmall
 │     (文字起こし・単語タイムスタンプ取得)│ (`word_timestamps=True`)
 └────────────┬──────────────────────────┘
              │ Raw Segments + Word Timestamps
@@ -40,8 +40,13 @@
 
 ### ① Transcriber (音声認識)
 
-* **処理内容:** 音声ファイルを読み込み、単語レベルのタイムスタンプを含むテキストデータを抽出。
-* **主要設定:** `word_timestamps=True`, `language="ja"`, `hallucination_silence_threshold=0.6`
+* **処理内容:** 選択した backend で音声ファイルを読み込み、共通の `RawSegment` と単語レベルの `WordTimestamp` を抽出。
+* **対応 backend:** `faster-whisper`（既定）と `SenseVoiceSmall`（sherpa-onnx）。CLI の `--backend` で選択する。
+* **共通契約:** backend は `transcribe` と `transcribe_sources` を提供し、単語タイムスタンプを秒単位で返す。単語タイムスタンプを取得できない推論結果は処理を継続せずエラーにする。
+* **SenseVoice モデル:** 初回実行時に固定 release のモデル archive をダウンロードし、SHA256 検証後に XDG cache へ保存する。`--offline` ではキャッシュを必須とする。
+* **長時間音声:** 音声全体を一度に推論せず、`--sensevoice-chunk-duration-s` 単位に分割する。各チャンクの単語時刻へ元音声の開始時刻を加算し、元の時間軸を維持する。
+* **VAD:** `--sensevoice-vad` 指定時は30msフレームのRMS energy VADで発話区間を抽出し、無音区間を推論対象から除外する。検出区間には既定0.25秒の padding を付け、`--sensevoice-vad-threshold-db` と `--sensevoice-vad-padding-s` で調整する。
+* **backend 固有設定:** Whisper のモデルサイズ・計算型と、SenseVoice の量子化 variant・provider・スレッド数・言語・ITN は各アダプターで管理する。
 
 ### ② Segmentator (NLP字幕分割)
 

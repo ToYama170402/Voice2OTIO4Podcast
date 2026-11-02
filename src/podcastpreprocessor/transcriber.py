@@ -1,10 +1,24 @@
-"""faster-whisper adapter."""
+"""Transcription backend contracts and the faster-whisper adapter."""
 
 from collections.abc import Callable
+from typing import Protocol
 
 from .models import RawSegment, WordTimestamp
 
 ProgressCallback = Callable[[str, float, float | None], None]
+TranscriptionResult = tuple[str, str, list[RawSegment], float | None]
+
+
+class Transcriber(Protocol):
+    def transcribe(
+        self, audio_path: str, source_id: str = "source_1"
+    ) -> list[RawSegment]: ...
+
+    def transcribe_sources(
+        self,
+        audio_paths: list[str],
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[TranscriptionResult]: ...
 
 
 class FasterWhisperTranscriber:
@@ -52,9 +66,9 @@ class FasterWhisperTranscriber:
         self,
         audio_paths: list[str],
         progress_callback: ProgressCallback | None = None,
-    ) -> list[tuple[str, str, list[RawSegment], float | None]]:
+    ) -> list[TranscriptionResult]:
         """Transcribe one file per source and retain detected media durations."""
-        results: list[tuple[str, str, list[RawSegment], float | None]] = []
+        results: list[TranscriptionResult] = []
         for index, audio_path in enumerate(audio_paths, start=1):
             source_id = f"source_{index}"
             segments, info = self._model.transcribe(
