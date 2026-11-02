@@ -1,6 +1,4 @@
-def main():
-    print("Hello from podcastpreprocessor!")
-
+from podcastpreprocessor.cli import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
