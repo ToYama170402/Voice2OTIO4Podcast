@@ -30,3 +30,10 @@ def test_audio_slices_reject_overlapping_segments() -> None:
 
     with pytest.raises(ValueError, match="overlap"):
         build_audio_slices(segments, "speaker_a")
+
+
+def test_audio_slices_reject_non_positive_duration() -> None:
+    segment = ProcessedSegment("s1", 1, 0, 30, 0, 30, "one")
+
+    with pytest.raises(ValueError, match="duration_frames"):
+        build_audio_slices([segment], "source_1", duration_frames=0)

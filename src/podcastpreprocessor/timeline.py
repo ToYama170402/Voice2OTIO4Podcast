@@ -20,7 +20,13 @@ def build_audio_slices(
             raise ValueError("duration_frames is required when there are no segments")
         return [AudioSlice(source_id, 0, duration_frames, 0, duration_frames)]
 
-    end_of_source = duration_frames or max(segment.end_frame for segment in ordered)
+    if duration_frames is not None and duration_frames <= 0:
+        raise ValueError("duration_frames must be positive")
+    end_of_source = (
+        duration_frames
+        if duration_frames is not None
+        else max(segment.end_frame for segment in ordered)
+    )
     if end_of_source < ordered[-1].end_frame:
         raise ValueError("duration_frames cannot be shorter than a segment")
 

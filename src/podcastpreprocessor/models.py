@@ -13,6 +13,30 @@ def seconds_to_frame(seconds: float, fps: int) -> int:
     return round(seconds * fps)
 
 
+def seconds_to_frame_range(
+    start: float,
+    end: float,
+    fps: int,
+    max_end_frame: int | None = None,
+) -> tuple[int, int] | None:
+    """Convert a positive seconds range, or return None if it rounds away."""
+    if not math.isfinite(start) or not math.isfinite(end):
+        raise ValueError("range endpoints must be finite")
+    if start < 0 or end <= start:
+        raise ValueError("range must satisfy 0 <= start < end")
+    if max_end_frame is not None and max_end_frame <= 0:
+        raise ValueError("max_end_frame must be positive")
+
+    start_frame = seconds_to_frame(start, fps)
+    end_frame = seconds_to_frame(end, fps)
+    if max_end_frame is not None:
+        start_frame = min(start_frame, max_end_frame)
+        end_frame = min(end_frame, max_end_frame)
+    if end_frame <= start_frame:
+        return None
+    return start_frame, end_frame
+
+
 @dataclass(frozen=True)
 class WordTimestamp:
     word: str
@@ -21,7 +45,12 @@ class WordTimestamp:
     probability: float
 
     def __post_init__(self) -> None:
-        if self.start < 0 or self.end < self.start:
+        if (
+            not math.isfinite(self.start)
+            or not math.isfinite(self.end)
+            or self.start < 0
+            or self.end < self.start
+        ):
             raise ValueError("word timestamp must satisfy 0 <= start <= end")
 
 
@@ -36,7 +65,12 @@ class RawSegment:
     source_id: str = "source_1"
 
     def __post_init__(self) -> None:
-        if self.start < 0 or self.end <= self.start:
+        if (
+            not math.isfinite(self.start)
+            or not math.isfinite(self.end)
+            or self.start < 0
+            or self.end <= self.start
+        ):
             raise ValueError("segment must satisfy 0 <= start < end")
         if not 0 <= self.no_speech_prob <= 1:
             raise ValueError("no_speech_prob must be between 0 and 1")
@@ -54,7 +88,12 @@ class RefinedSegment:
     source_id: str = "source_1"
 
     def __post_init__(self) -> None:
-        if self.start < 0 or self.end <= self.start:
+        if (
+            not math.isfinite(self.start)
+            or not math.isfinite(self.end)
+            or self.start < 0
+            or self.end <= self.start
+        ):
             raise ValueError("segment must satisfy 0 <= start < end")
         if self.track_index <= 0:
             raise ValueError("track_index must be positive")

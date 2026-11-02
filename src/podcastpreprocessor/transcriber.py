@@ -109,11 +109,15 @@ def _to_raw_segment(
 ) -> RawSegment:
     words: list[WordTimestamp] = []
     for word in getattr(segment, "words", None) or []:
+        start = float(getattr(word, "start"))
+        end = float(getattr(word, "end"))
+        if end <= start:
+            continue
         words.append(
             WordTimestamp(
                 word=getattr(word, "word", ""),
-                start=float(getattr(word, "start")),
-                end=float(getattr(word, "end")),
+                start=start,
+                end=end,
                 probability=float(getattr(word, "probability", 0.0)),
             )
         )
