@@ -21,8 +21,8 @@ class WordTimestamp:
     probability: float
 
     def __post_init__(self) -> None:
-        if self.start < 0 or self.end <= self.start:
-            raise ValueError("word timestamp must satisfy 0 <= start < end")
+        if self.start < 0 or self.end < self.start:
+            raise ValueError("word timestamp must satisfy 0 <= start <= end")
 
 
 @dataclass

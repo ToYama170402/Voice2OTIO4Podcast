@@ -14,8 +14,10 @@ def test_seconds_to_frame_rounds_to_nearest_frame() -> None:
 
 
 def test_models_reject_invalid_ranges() -> None:
+    WordTimestamp("zero duration", 1.0, 1.0, 0.9)
+
     with pytest.raises(ValueError):
-        WordTimestamp("bad", 1.0, 1.0, 0.9)
+        WordTimestamp("reversed", 2.0, 1.0, 0.9)
 
     with pytest.raises(ValueError):
         RawSegment(1, 2.0, 1.0, "bad", 0.0)
