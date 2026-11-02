@@ -46,3 +46,13 @@ def test_process_sources_writes_one_three_layer_group_per_source(tmp_path) -> No
         otio.schema.TrackKind.Video,
         otio.schema.TrackKind.Audio,
     ]
+    assert (tmp_path / "timeline.srt").read_text(encoding="utf-8") == (
+        "1\n"
+        "00:00:00,000 --> 00:00:01,000\n"
+        "Aです。\n"
+        "\n"
+        "2\n"
+        "00:00:00,500 --> 00:00:01,500\n"
+        "Bです。\n"
+        "\n"
+    )

@@ -16,6 +16,12 @@ faster-whisperのモデルとSudachi辞書は初回セットアップ時に取�
 uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --model small --device cpu --compute-type int8 --fps 30
 ```
 
+上記の実行では、指定したOTIOと同じ場所に `podcast.srt` も生成されます。SRTの出力先を変更する場合は `--srt-output` を指定します。
+
+```powershell
+uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --srt-output subtitles.srt
+```
+
 `turbo`など大きいモデルをCPUで読み込めない場合は、`base`または`tiny`に下げてください。モデルの読み込みに失敗した場合、CLIは利用可能な設定を案内して終了します。
 
 処理は次の順で進みます。
@@ -23,7 +29,7 @@ uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --model sma
 1. faster-whisperで日本語音声を単語タイムスタンプ付きで認識
 2. 句読点、文字数、表示時間を基準に字幕を分割
 3. 0.4秒超の無音、フィラー、`no_speech_prob > 0.8`をカット候補として判定
-4. DaVinci Resolve向けのOTIOを出力
+4. DaVinci Resolve向けのOTIOとSRTを出力
 
 入力ファイルは指定順に `source_1`、`source_2` として別々の話者/音声トラックになります。1ファイル内の話者分離は行いません。
 

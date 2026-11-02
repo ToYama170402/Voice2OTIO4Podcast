@@ -13,6 +13,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("audio", nargs="+", help="input audio file(s), one per speaker")
     parser.add_argument("output", help="output OTIO file")
+    parser.add_argument(
+        "--srt-output",
+        help="output SRT file (default: same path as output with .srt suffix)",
+    )
     parser.add_argument("--model", default="small", help="faster-whisper model size")
     parser.add_argument("--device", default="auto", help="inference device")
     parser.add_argument(
@@ -50,7 +54,13 @@ def main(argv: list[str] | None = None) -> int:
             (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
         )
     try:
-        process_sources(sources, args.output, args.fps, args.sequence_name)
+        process_sources(
+            sources,
+            args.output,
+            args.fps,
+            args.sequence_name,
+            args.srt_output,
+        )
     except (OSError, ValueError) as error:
         parser.error(str(error))
     return 0

@@ -1,11 +1,13 @@
-"""End-to-end orchestration for transcription and XML generation."""
+"""End-to-end orchestration for transcription and timeline generation."""
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from .evaluator import evaluate_segment
 from .models import AudioSource, ProcessedSegment, RawSegment, seconds_to_frame
 from .otio import write_otio
 from .segmentator import segment_raw
+from .srt import write_srt
 
 
 def process_segments(
@@ -14,6 +16,7 @@ def process_segments(
     output_path: str,
     fps: int = 30,
     sequence_name: str = "Podcast_Timeline",
+    srt_output_path: str | None = None,
 ) -> list[ProcessedSegment]:
     """Convert one source and write an OTIO timeline."""
     raw_list = list(raw_segments)
@@ -26,6 +29,7 @@ def process_segments(
         output_path,
         fps,
         sequence_name,
+        srt_output_path,
     )
 
 
@@ -34,6 +38,7 @@ def process_sources(
     output_path: str,
     fps: int = 30,
     sequence_name: str = "Podcast_Timeline",
+    srt_output_path: str | None = None,
 ) -> list[ProcessedSegment]:
     """Process multiple one-file-per-speaker sources into one OTIO timeline."""
     processed: list[ProcessedSegment] = []
@@ -68,6 +73,11 @@ def process_sources(
         processed,
         [source for source, _ in source_list],
         sequence_name,
+        fps,
+    )
+    write_srt(
+        srt_output_path or str(Path(output_path).with_suffix(".srt")),
+        processed,
         fps,
     )
     return processed
