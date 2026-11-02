@@ -1,8 +1,10 @@
 """faster-whisper adapter."""
 
-from collections.abc import Iterable
+from collections.abc import Callable
 
 from .models import RawSegment, WordTimestamp
+
+ProgressCallback = Callable[[str, float, float | None], None]
 
 
 class FasterWhisperTranscriber:
@@ -47,7 +49,9 @@ class FasterWhisperTranscriber:
         ]
 
     def transcribe_sources(
-        self, audio_paths: list[str]
+        self,
+        audio_paths: list[str],
+        progress_callback: ProgressCallback | None = None,
     ) -> list[tuple[str, str, list[RawSegment], float | None]]:
         """Transcribe one file per source and retain detected media durations."""
         results: list[tuple[str, str, list[RawSegment], float | None]] = []
@@ -58,17 +62,29 @@ class FasterWhisperTranscriber:
                 language="ja",
                 word_timestamps=True,
             )
-            raw_segments = [
-                _to_raw_segment(item_index, segment, source_id)
-                for item_index, segment in enumerate(segments)
-            ]
             duration = getattr(info, "duration", None)
+            duration_value = float(duration) if duration else None
+            if progress_callback is not None:
+                progress_callback(audio_path, 0.0, duration_value)
+            raw_segments: list[RawSegment] = []
+            last_elapsed = 0.0
+            for item_index, segment in enumerate(segments):
+                raw_segments.append(_to_raw_segment(item_index, segment, source_id))
+                last_elapsed = float(getattr(segment, "end"))
+                if progress_callback is not None:
+                    progress_callback(
+                        audio_path,
+                        last_elapsed,
+                        duration_value,
+                    )
+            if progress_callback is not None and last_elapsed != duration_value:
+                progress_callback(audio_path, duration_value or 0.0, duration_value)
             results.append(
                 (
                     source_id,
                     audio_path,
                     raw_segments,
-                    float(duration) if duration else None,
+                    duration_value,
                 )
             )
         return results

@@ -6,6 +6,39 @@ import pytest
 from podcastpreprocessor.transcriber import FasterWhisperTranscriber
 
 
+def test_transcribe_sources_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    faster_whisper = ModuleType("faster_whisper")
+
+    class FakeWhisperModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def transcribe(
+            self, audio_path: str, **kwargs: object
+        ) -> tuple[object, object]:
+            segments = [
+                SimpleNamespace(start=0.0, end=4.0, text="one"),
+                SimpleNamespace(start=4.0, end=10.0, text="two"),
+            ]
+            return segments, SimpleNamespace(duration=10.0)
+
+    faster_whisper.WhisperModel = FakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+    progress: list[tuple[str, float, float | None]] = []
+
+    transcriber = FasterWhisperTranscriber()
+    results = transcriber.transcribe_sources(
+        ["episode.wav"], progress_callback=lambda *values: progress.append(values)
+    )
+
+    assert len(results[0][2]) == 2
+    assert progress == [
+        ("episode.wav", 0.0, 10.0),
+        ("episode.wav", 4.0, 10.0),
+        ("episode.wav", 10.0, 10.0),
+    ]
+
+
 def test_transcriber_explains_cpu_memory_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
