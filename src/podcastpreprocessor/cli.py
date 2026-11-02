@@ -2,16 +2,17 @@
 
 import argparse
 
-from .pipeline import process_segments
+from .models import AudioSource, seconds_to_frame
+from .pipeline import process_sources
 from .transcriber import FasterWhisperTranscriber
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate FCP7 XML from Japanese audio"
+        description="Generate OpenTimelineIO from Japanese audio"
     )
-    parser.add_argument("audio", help="input audio file")
-    parser.add_argument("output", help="output FCP7 XML file")
+    parser.add_argument("audio", nargs="+", help="input audio file(s), one per speaker")
+    parser.add_argument("output", help="output OTIO file")
     parser.add_argument("--model", default="small", help="faster-whisper model size")
     parser.add_argument("--device", default="auto", help="inference device")
     parser.add_argument(
@@ -23,17 +24,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     try:
-        transcriber = FasterWhisperTranscriber(
+        transcribed = FasterWhisperTranscriber(
             args.model, args.device, args.compute_type
-        )
-        raw_segments = transcriber.transcribe(args.audio)
+        ).transcribe_sources(args.audio)
     except RuntimeError as error:
-        build_parser().error(str(error))
-    process_segments(
-        raw_segments, args.audio, args.output, args.fps, args.sequence_name
-    )
+        parser.error(str(error))
+    sources: list[tuple[AudioSource, list]] = []
+    for track_index, (source_id, audio_path, raw_segments, duration) in enumerate(
+        transcribed, start=1
+    ):
+        end_frame = (
+            seconds_to_frame(duration, args.fps)
+            if duration
+            else max(
+                (seconds_to_frame(segment.end, args.fps) for segment in raw_segments),
+                default=0,
+            )
+        )
+        if end_frame <= 0:
+            parser.error(f"transcription produced no duration: {audio_path}")
+        sources.append(
+            (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
+        )
+    try:
+        process_sources(sources, args.output, args.fps, args.sequence_name)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     return 0
 
 

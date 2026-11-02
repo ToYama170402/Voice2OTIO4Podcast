@@ -1,10 +1,16 @@
 [project]
 name = "podcastpreprocessor"
 version = "0.1.0"
-description = "Generate linked FCP7 XML timelines from podcast transcription"
+description = "Generate linked OpenTimelineIO timelines from podcast transcription"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["faster-whisper>=1.1.0", "onnxruntime>=1.14.1,<1.24"]
+dependencies = [
+  "faster-whisper>=1.1.0",
+  "onnxruntime>=1.14.1,<1.24",
+  "opentimelineio>=0.17.0",
+  "sudachipy>=0.6.8",
+  "sudachidict_core>=20230110",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

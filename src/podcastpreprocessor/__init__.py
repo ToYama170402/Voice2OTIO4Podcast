@@ -1,6 +1,8 @@
 """Podcast preprocessing pipeline."""
 
 from .models import (
+    AudioSlice,
+    AudioSource,
     ProcessedSegment,
     RawSegment,
     RefinedSegment,
@@ -9,6 +11,8 @@ from .models import (
 )
 
 __all__ = [
+    "AudioSource",
+    "AudioSlice",
     "ProcessedSegment",
     "RawSegment",
     "RefinedSegment",

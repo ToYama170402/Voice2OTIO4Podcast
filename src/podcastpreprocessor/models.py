@@ -33,6 +33,7 @@ class RawSegment:
     text: str
     no_speech_prob: float
     words: list[WordTimestamp] = field(default_factory=list)
+    source_id: str = "source_1"
 
     def __post_init__(self) -> None:
         if self.start < 0 or self.end <= self.start:
@@ -50,6 +51,7 @@ class RefinedSegment:
     text: str
     no_speech_prob: float
     words: list[WordTimestamp] = field(default_factory=list)
+    source_id: str = "source_1"
 
     def __post_init__(self) -> None:
         if self.start < 0 or self.end <= self.start:
@@ -71,6 +73,9 @@ class ProcessedSegment:
     flag_label: str = ""
     marker_reason: str = ""
     color_label: str = "None"
+    source_id: str = "source_1"
+    audio_path: str = ""
+    link_group_id: int = 0
 
     def __post_init__(self) -> None:
         if self.track_index <= 0:
@@ -79,3 +84,45 @@ class ProcessedSegment:
             raise ValueError("timeline frames must satisfy 0 <= start < end")
         if self.in_frame < 0 or self.out_frame <= self.in_frame:
             raise ValueError("source frames must satisfy 0 <= in < out")
+        if not self.source_id:
+            raise ValueError("source_id must not be empty")
+
+
+@dataclass(frozen=True)
+class AudioSource:
+    source_id: str
+    path: str
+    track_index: int
+    duration_frames: int
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.source_id:
+            raise ValueError("source_id must not be empty")
+        if not self.path:
+            raise ValueError("path must not be empty")
+        if self.track_index <= 0:
+            raise ValueError("track_index must be positive")
+        if self.duration_frames <= 0:
+            raise ValueError("duration_frames must be positive")
+
+
+@dataclass(frozen=True)
+class AudioSlice:
+    source_id: str
+    start_frame: int
+    end_frame: int
+    source_in_frame: int
+    source_out_frame: int
+    segment_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.start_frame < 0 or self.end_frame <= self.start_frame:
+            raise ValueError("timeline slice must have a positive range")
+        if self.source_in_frame < 0 or self.source_out_frame <= self.source_in_frame:
+            raise ValueError("source slice must have a positive range")
+        if (
+            self.end_frame - self.start_frame
+            != self.source_out_frame - self.source_in_frame
+        ):
+            raise ValueError("timeline and source slice durations must match")

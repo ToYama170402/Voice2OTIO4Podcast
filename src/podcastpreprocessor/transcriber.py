@@ -33,18 +33,50 @@ class FasterWhisperTranscriber:
                 ) from error
             raise
 
-    def transcribe(self, audio_path: str) -> list[RawSegment]:
-        segments, _info = self._model.transcribe(
+    def transcribe(
+        self, audio_path: str, source_id: str = "source_1"
+    ) -> list[RawSegment]:
+        segments, info = self._model.transcribe(
             audio_path,
             language="ja",
             word_timestamps=True,
         )
         return [
-            _to_raw_segment(index, segment) for index, segment in enumerate(segments)
+            _to_raw_segment(index, segment, source_id)
+            for index, segment in enumerate(segments)
         ]
 
+    def transcribe_sources(
+        self, audio_paths: list[str]
+    ) -> list[tuple[str, str, list[RawSegment], float | None]]:
+        """Transcribe one file per source and retain detected media durations."""
+        results: list[tuple[str, str, list[RawSegment], float | None]] = []
+        for index, audio_path in enumerate(audio_paths, start=1):
+            source_id = f"source_{index}"
+            segments, info = self._model.transcribe(
+                audio_path,
+                language="ja",
+                word_timestamps=True,
+            )
+            raw_segments = [
+                _to_raw_segment(item_index, segment, source_id)
+                for item_index, segment in enumerate(segments)
+            ]
+            duration = getattr(info, "duration", None)
+            results.append(
+                (
+                    source_id,
+                    audio_path,
+                    raw_segments,
+                    float(duration) if duration else None,
+                )
+            )
+        return results
 
-def _to_raw_segment(index: int, segment: object) -> RawSegment:
+
+def _to_raw_segment(
+    index: int, segment: object, source_id: str = "source_1"
+) -> RawSegment:
     words: list[WordTimestamp] = []
     for word in getattr(segment, "words", None) or []:
         words.append(
@@ -62,6 +94,7 @@ def _to_raw_segment(index: int, segment: object) -> RawSegment:
         text=str(getattr(segment, "text", "")),
         no_speech_prob=float(getattr(segment, "no_speech_prob", 0.0)),
         words=words,
+        source_id=source_id,
     )
 
 
