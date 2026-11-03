@@ -19,6 +19,13 @@ class SenseVoiceModelSpec:
     sha256: str | None = None
 
 
+@dataclass(frozen=True)
+class VadModelSpec:
+    model_name: str
+    model_url: str
+    sha256: str | None = None
+
+
 _MODEL_RELEASE = "2024-07-17"
 _MODEL_SPECS = {
     "int8": SenseVoiceModelSpec(
@@ -33,6 +40,15 @@ _MODEL_SPECS = {
         sha256="7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e",
     ),
 }
+
+_VAD_MODEL_SPEC = VadModelSpec(
+    model_name="silero_vad.onnx",
+    model_url=(
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+        "asr-models/silero_vad.onnx"
+    ),
+    sha256="9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+)
 
 
 class SenseVoiceModelManager:
@@ -74,6 +90,52 @@ class SenseVoiceModelManager:
             )
         self._download_and_extract(spec, target_dir)
         return self._validate_model_dir(target_dir, quantization)
+
+    def resolve_vad(
+        self,
+        model_path: str | Path | None = None,
+        offline: bool = False,
+    ) -> Path:
+        """Resolve the Silero VAD model from an explicit path or cache."""
+        spec = _VAD_MODEL_SPEC
+        if model_path is not None:
+            path = Path(model_path)
+            if not path.is_file():
+                raise RuntimeError(f"VADモデルが見つかりません: {path}")
+            return path
+
+        target_dir = self._cache_dir / "vad" / "silero"
+        target_path = target_dir / spec.model_name
+        if target_path.is_file():
+            return target_path
+        if offline:
+            raise RuntimeError(
+                f"VADモデルがキャッシュにありません: {target_path}."
+                " --offlineを外して初回ダウンロードを実行してください。"
+            )
+        self._download_file(spec, target_path)
+        return target_path
+
+    def _download_file(self, spec: VadModelSpec, target_path: Path) -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="vad-", dir=target_path.parent) as temp:
+            temp_path = Path(temp) / spec.model_name
+            try:
+                with urlopen(spec.model_url, timeout=self._timeout) as response:
+                    with temp_path.open("wb") as output:
+                        shutil.copyfileobj(response, output)
+            except OSError as error:
+                raise RuntimeError(
+                    f"VADモデルのダウンロードに失敗しました: {spec.model_url}"
+                ) from error
+            if spec.sha256 is not None:
+                digest = _sha256(temp_path)
+                if digest != spec.sha256:
+                    raise RuntimeError(
+                        "VADモデルのSHA256検証に失敗しました。"
+                        f" expected={spec.sha256} actual={digest}"
+                    )
+            os.replace(temp_path, target_path)
 
     def _download_and_extract(
         self, spec: SenseVoiceModelSpec, target_dir: Path

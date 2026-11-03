@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-sensevoice = ["numpy>=1.24", "sherpa-onnx>=1.12.0", "soundfile>=0.12.1"]
+sensevoice = ["numpy>=1.24", "sherpa-onnx>=2.0.1", "soundfile>=0.12.1"]
 
 [project.scripts]
 podcast-preprocessor = "podcastpreprocessor.cli:main"

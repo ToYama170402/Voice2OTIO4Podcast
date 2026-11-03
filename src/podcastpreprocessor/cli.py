@@ -96,6 +96,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="speech padding added around VAD regions in seconds",
     )
     parser.add_argument(
+        "--sensevoice-vad-model",
+        help="local Silero VAD ONNX model (default: download to cache)",
+    )
+    parser.add_argument(
+        "--sensevoice-vad-threshold",
+        type=float,
+        default=0.5,
+        help="Silero VAD speech probability threshold",
+    )
+    parser.add_argument(
+        "--sensevoice-vad-min-silence-s",
+        type=float,
+        default=0.25,
+        help="minimum silence duration used to end a speech region",
+    )
+    parser.add_argument(
+        "--sensevoice-vad-min-speech-s",
+        type=float,
+        default=0.1,
+        help="minimum speech duration to retain",
+    )
+    parser.add_argument(
+        "--sensevoice-vad-max-speech-s",
+        type=float,
+        default=120.0,
+        help="maximum duration of one VAD speech region",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="do not download a missing SenseVoice model",
@@ -146,6 +174,11 @@ def main(argv: list[str] | None = None) -> int:
             args.sensevoice_vad,
             args.sensevoice_vad_threshold_db,
             args.sensevoice_vad_padding_s,
+            args.sensevoice_vad_model,
+            args.sensevoice_vad_threshold,
+            args.sensevoice_vad_min_silence_s,
+            args.sensevoice_vad_min_speech_s,
+            args.sensevoice_vad_max_speech_s,
         ).transcribe_sources(args.audio, progress_callback=progress)
     except RuntimeError as error:
         parser.error(str(error))

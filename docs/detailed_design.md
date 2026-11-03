@@ -44,8 +44,8 @@
 * **対応 backend:** `faster-whisper`（既定）と `SenseVoiceSmall`（sherpa-onnx）。CLI の `--backend` で選択する。
 * **共通契約:** backend は `transcribe` と `transcribe_sources` を提供し、単語タイムスタンプを秒単位で返す。単語タイムスタンプを取得できない推論結果は処理を継続せずエラーにする。
 * **SenseVoice モデル:** 初回実行時に固定 release のモデル archive をダウンロードし、SHA256 検証後に XDG cache へ保存する。`--offline` ではキャッシュを必須とする。
-* **長時間音声:** 音声全体を一度に推論せず、`--sensevoice-chunk-duration-s` 単位に分割する。各チャンクの単語時刻へ元音声の開始時刻を加算し、元の時間軸を維持する。
-* **VAD:** `--sensevoice-vad` 指定時は30msフレームのRMS energy VADで発話区間を抽出し、無音区間を推論対象から除外する。検出区間には既定0.25秒の padding を付け、`--sensevoice-vad-threshold-db` と `--sensevoice-vad-padding-s` で調整する。
+* **長時間音声:** `--sensevoice-vad` 指定時はSilero VADで発話区間を抽出し、VAD区間を基本単位として推論する。長すぎる発話区間だけ `--sensevoice-vad-max-speech-s` で分割し、各区間の単語時刻へ元音声の開始時刻を一度だけ加算して元の時間軸を維持する。VADを使わない互換経路では `--sensevoice-chunk-duration-s` を使用する。
+* **VAD:** sherpa-onnxのSilero VADへ16kHz mono音声をwindow単位で投入し、発話区間を抽出する。検出区間には既定0.25秒のpaddingを付け、近接区間を結合してから推論する。`--sensevoice-vad-threshold`、`--sensevoice-vad-min-silence-s`、`--sensevoice-vad-min-speech-s`、`--sensevoice-vad-padding-s` で調整する。VADモデルはSenseVoiceモデルと別artifactとしてcache、SHA256検証、offline解決を行う。
 * **backend 固有設定:** Whisper のモデルサイズ・計算型と、SenseVoice の量子化 variant・provider・スレッド数・言語・ITN は各アダプターで管理する。
 
 ### ② Segmentator (NLP字幕分割)

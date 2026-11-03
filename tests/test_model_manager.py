@@ -62,6 +62,51 @@ def test_model_manager_offline_requires_cached_model(tmp_path: Path) -> None:
         manager.resolve(offline=True)
 
 
+def test_model_manager_downloads_and_reuses_vad_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = b"silero"
+    calls: list[str] = []
+
+    class Response(BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+    def fake_urlopen(url: str, timeout: float) -> Response:
+        calls.append(url)
+        return Response(payload)
+
+    monkeypatch.setattr("podcastpreprocessor.model_manager.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        model_manager,
+        "_VAD_MODEL_SPEC",
+        replace(model_manager._VAD_MODEL_SPEC, sha256=None),
+    )
+    manager = SenseVoiceModelManager(tmp_path)
+
+    first = manager.resolve_vad()
+    second = manager.resolve_vad()
+
+    assert first == second
+    assert first.read_bytes() == payload
+    assert len(calls) == 1
+
+
+def test_model_manager_vad_offline_requires_cached_model(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="キャッシュにありません"):
+        SenseVoiceModelManager(tmp_path).resolve_vad(offline=True)
+
+
+def test_model_manager_vad_accepts_explicit_model(tmp_path: Path) -> None:
+    model_path = tmp_path / "silero_vad.onnx"
+    model_path.write_bytes(b"silero")
+
+    assert SenseVoiceModelManager(tmp_path).resolve_vad(model_path) == model_path
+
+
 def test_model_manager_rejects_archive_path_traversal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

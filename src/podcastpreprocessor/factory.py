@@ -23,6 +23,11 @@ def build_transcriber(
     sensevoice_vad: bool = False,
     sensevoice_vad_threshold_db: float = -40.0,
     sensevoice_vad_padding_s: float = 0.25,
+    sensevoice_vad_model: str | None = None,
+    sensevoice_vad_threshold: float = 0.5,
+    sensevoice_vad_min_silence_s: float = 0.25,
+    sensevoice_vad_min_speech_s: float = 0.1,
+    sensevoice_vad_max_speech_s: float = 120.0,
 ) -> Transcriber:
     if backend == "faster-whisper":
         return FasterWhisperTranscriber(model, device, compute_type)
@@ -40,5 +45,10 @@ def build_transcriber(
             vad=sensevoice_vad,
             vad_threshold_db=sensevoice_vad_threshold_db,
             vad_padding_s=sensevoice_vad_padding_s,
+            vad_model=sensevoice_vad_model,
+            vad_threshold=sensevoice_vad_threshold,
+            vad_min_silence_duration=sensevoice_vad_min_silence_s,
+            vad_min_speech_duration=sensevoice_vad_min_speech_s,
+            vad_max_speech_duration=sensevoice_vad_max_speech_s,
         )
     raise ValueError(f"unsupported transcription backend: {backend}")

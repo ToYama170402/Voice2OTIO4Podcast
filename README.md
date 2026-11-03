@@ -34,13 +34,13 @@ SenseVoice は初回実行時に公式 sherpa-onnx モデルをキャッシュ�
 uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-quantization int8 --sensevoice-num-threads 8 --sensevoice-chunk-duration-s 30
 ```
 
-無音区間を推論しない軽量 VAD を使う場合は `--sensevoice-vad` を追加します。
+無音区間を推論しないSilero VADを使う場合は `--sensevoice-vad` を追加します。初回実行時にVADモデルを既定のキャッシュへ保存し、`--offline`ではキャッシュ済みモデルだけを使用します。
 
 ```powershell
 uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-vad --sensevoice-quantization int8
 ```
 
-モデルは通常 `~/.cache/podcastpreprocessor/` に保存されます。ネットワークを使わず既存キャッシュだけで実行する場合は `--offline`、手動配置したモデルを使う場合は `--sensevoice-model` を指定します。長時間音声は既定の30秒チャンクで処理され、メモリが厳しい場合は `--sensevoice-chunk-duration-s 15` のように短くできます。VAD が小さい声を落とす場合は `--sensevoice-vad-threshold-db -50` や `--sensevoice-vad-padding-s 0.4` を試してください。`int4` は公式配布モデルが登録されている場合のみ使用できます。
+モデルは通常 `~/.cache/podcastpreprocessor/` に保存されます。ネットワークを使わず既存キャッシュだけで実行する場合は `--offline`、手動配置したSenseVoiceモデルは `--sensevoice-model`、VADモデルは `--sensevoice-vad-model` で指定します。VAD区間は原則1回の推論へ渡し、長い発話だけ `--sensevoice-vad-max-speech-s` で分割します。VADの感度は `--sensevoice-vad-threshold`、発話区間の結合は `--sensevoice-vad-min-silence-s`、前後余白は `--sensevoice-vad-padding-s` で調整できます。`int4` は公式配布モデルが登録されている場合のみ使用できます。
 
 上記の実行では、指定したOTIOと同じ場所に `podcast.srt` も生成されます。SRTの出力先を変更する場合は `--srt-output` を指定します。
 

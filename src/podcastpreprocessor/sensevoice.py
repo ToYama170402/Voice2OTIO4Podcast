@@ -3,11 +3,13 @@
 from importlib import import_module
 import math
 import re
+from types import SimpleNamespace
 from typing import Any
 
 from .model_manager import SenseVoiceModelManager
 from .models import RawSegment, WordTimestamp
 from .transcriber import ProgressCallback, TranscriptionResult
+from .vad import speech_segments_to_regions, vad_model_config
 
 _TAG_PATTERN = re.compile(r"<\|[^|]+\|>")
 
@@ -27,6 +29,11 @@ class SenseVoiceTranscriber:
         vad: bool = False,
         vad_threshold_db: float = -40.0,
         vad_padding_s: float = 0.25,
+        vad_model: str | None = None,
+        vad_threshold: float = 0.5,
+        vad_min_silence_duration: float = 0.25,
+        vad_min_speech_duration: float = 0.1,
+        vad_max_speech_duration: float = 120.0,
     ) -> None:
         if num_threads <= 0:
             raise ValueError("num_threads must be positive")
@@ -34,6 +41,12 @@ class SenseVoiceTranscriber:
             raise ValueError("chunk_duration_s must be positive")
         if vad_padding_s < 0:
             raise ValueError("vad_padding_s must be non-negative")
+        if not 0 < vad_threshold < 1:
+            raise ValueError("vad_threshold must be between 0 and 1")
+        if vad_min_silence_duration < 0 or vad_min_speech_duration < 0:
+            raise ValueError("VAD durations must be non-negative")
+        if vad_max_speech_duration <= 0:
+            raise ValueError("vad_max_speech_duration must be positive")
         try:
             sherpa_onnx = import_module("sherpa_onnx")
             numpy = import_module("numpy")
@@ -64,10 +77,22 @@ class SenseVoiceTranscriber:
             ) from error
         self._soundfile = soundfile
         self._numpy = numpy
+        self._sherpa_onnx = sherpa_onnx
+        self._provider = provider
+        self._num_threads = num_threads
         self._chunk_duration_s = chunk_duration_s
         self._vad = vad
         self._vad_threshold_db = vad_threshold_db
         self._vad_padding_s = vad_padding_s
+        self._vad_model_path = (
+            SenseVoiceModelManager(cache_dir).resolve_vad(vad_model, offline=offline)
+            if vad
+            else None
+        )
+        self._vad_threshold = vad_threshold
+        self._vad_min_silence_duration = vad_min_silence_duration
+        self._vad_min_speech_duration = vad_min_speech_duration
+        self._vad_max_speech_duration = vad_max_speech_duration
 
     def transcribe(
         self, audio_path: str, source_id: str = "source_1"
@@ -105,11 +130,18 @@ class SenseVoiceTranscriber:
         chunk_samples = max(1, round(self._chunk_duration_s * sample_rate))
         segments: list[RawSegment] = []
         regions = (
-            _detect_speech_regions(
+            _detect_sherpa_speech_regions(
+                self._sherpa_onnx,
                 audio,
                 sample_rate,
-                threshold_db=self._vad_threshold_db,
+                str(self._vad_model_path),
+                threshold=self._vad_threshold,
+                min_silence_duration=self._vad_min_silence_duration,
+                min_speech_duration=self._vad_min_speech_duration,
+                max_speech_duration=self._vad_max_speech_duration,
                 padding_s=self._vad_padding_s,
+                provider=self._provider,
+                num_threads=self._num_threads,
             )
             if self._vad
             else [(0, len(audio))]
@@ -119,8 +151,15 @@ class SenseVoiceTranscriber:
         if progress_callback is not None:
             progress_callback(audio_path, 0.0, duration)
         for region_start, region_end in regions:
-            for chunk_start in range(region_start, region_end, chunk_samples):
-                chunk_end = min(chunk_start + chunk_samples, region_end)
+            chunk_ranges = (
+                [(region_start, region_end)]
+                if self._vad
+                else [
+                    (chunk_start, min(chunk_start + chunk_samples, region_end))
+                    for chunk_start in range(region_start, region_end, chunk_samples)
+                ]
+            )
+            for chunk_start, chunk_end in chunk_ranges:
                 offset = chunk_start / sample_rate
                 chunk_duration = (chunk_end - chunk_start) / sample_rate
                 stream = self._recognizer.create_stream()
@@ -157,9 +196,9 @@ class SenseVoiceTranscriber:
         target_length = round(len(mono) * 16000 / sample_rate)
         source_positions = self._numpy.arange(len(mono))
         target_positions = self._numpy.arange(target_length) * sample_rate / 16000
-        return self._numpy.interp(
-            target_positions, source_positions, mono
-        ).astype("float32")
+        return self._numpy.interp(target_positions, source_positions, mono).astype(
+            "float32"
+        )
 
 
 def _to_raw_segment(
@@ -206,6 +245,67 @@ def _to_raw_segment(
         no_speech_prob=0.0,
         words=words,
         source_id=source_id,
+    )
+
+
+def _detect_sherpa_speech_regions(
+    sherpa_onnx: Any,
+    audio: Any,
+    sample_rate: int,
+    model_path: str,
+    *,
+    threshold: float,
+    min_silence_duration: float,
+    min_speech_duration: float,
+    max_speech_duration: float,
+    padding_s: float,
+    provider: str = "cpu",
+    num_threads: int = 1,
+) -> list[tuple[int, int]]:
+    config = vad_model_config(
+        sherpa_onnx,
+        model_path,
+        threshold=threshold,
+        min_silence_duration=min_silence_duration,
+        min_speech_duration=min_speech_duration,
+        max_speech_duration=max_speech_duration,
+        window_size=512,
+        provider=provider,
+        num_threads=num_threads,
+    )
+    config.sample_rate = sample_rate
+    vad = sherpa_onnx.VoiceActivityDetector(
+        config,
+        buffer_size_in_seconds=max(30.0, max_speech_duration + 1.0),
+    )
+    window_size = config.silero_vad.window_size
+    segments: list[object] = []
+    for start in range(0, len(audio), window_size):
+        vad.accept_waveform(audio[start : start + window_size])
+        while not vad.empty():
+            segment = vad.front
+            segments.append(
+                SimpleNamespace(
+                    start=float(segment.start),
+                    samples=segment.samples[:],
+                )
+            )
+            vad.pop()
+    vad.flush()
+    while not vad.empty():
+        segment = vad.front
+        segments.append(
+            SimpleNamespace(
+                start=float(segment.start),
+                samples=segment.samples[:],
+            )
+        )
+        vad.pop()
+    return speech_segments_to_regions(
+        segments,
+        sample_rate,
+        len(audio),
+        padding_s=padding_s,
     )
 
 
