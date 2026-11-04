@@ -41,12 +41,17 @@ def _title_clip(
     end_frame: int,
     fps: float,
     link_group_id: int,
+    available_duration_frames: int,
     metadata: dict[str, object] | None = None,
 ) -> otio.schema.Clip:
     """Create a generated text clip instead of a clip with missing media."""
     reference = otio.schema.GeneratorReference(
         generator_kind="Text",
         parameters={"text": text},
+        available_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0, fps),
+            duration=otio.opentime.RationalTime(available_duration_frames, fps),
+        ),
     )
     return _clip(
         text,
@@ -149,6 +154,7 @@ def generate_otio(
                     segment.end_frame,
                     fps,
                     link_group_id,
+                    source.duration_frames,
                     metadata=common,
                 ),
                 segment.start_frame,
@@ -162,6 +168,7 @@ def generate_otio(
                     segment.end_frame,
                     fps,
                     link_group_id,
+                    source.duration_frames,
                     metadata={
                         **common,
                         "cut_candidate": True,

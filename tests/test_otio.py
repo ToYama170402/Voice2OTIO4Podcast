@@ -56,9 +56,16 @@ def test_generate_otio_builds_tracks_links_and_audio_reference(tmp_path) -> None
     assert isinstance(title_clip.media_reference, otio.schema.GeneratorReference)
     assert title_clip.media_reference.generator_kind == "Text"
     assert title_clip.media_reference.parameters["text"] == "えーと候補"
+    assert title_clip.media_reference.available_range == otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0, 30),
+        duration=otio.opentime.RationalTime(90, 30),
+    )
     assert title_clip.source_range.start_time.value == 0
     assert isinstance(
         timeline.tracks[0][1].media_reference, otio.schema.GeneratorReference
+    )
+    assert timeline.tracks[0][1].media_reference.available_range == (
+        title_clip.media_reference.available_range
     )
     assert timeline.tracks[0][1].metadata["marker_reason"] == "判定: フィラー (えーと)"
     assert timeline.tracks[0][1].markers[0].name == "カット候補"
