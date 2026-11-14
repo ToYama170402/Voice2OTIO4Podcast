@@ -1,14 +1,45 @@
-"""Deterministic subtitle segmentation from word timestamps."""
+"""Deterministic subtitle segmentation from word timestamps.
+
+Segment boundaries are only ever placed at bunsetsu (Japanese clause unit)
+boundaries, so a slice never cuts through the middle of a word or bunsetsu.
+Filler utterances are always emitted as standalone segments, which makes
+them independent slices in the OTIO timeline that an editor can cut without
+touching the surrounding speech.
+"""
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from sudachipy import Dictionary, SplitMode
 
+from .evaluator import FILLER_PATTERN, filler_core
 from .models import RawSegment, RefinedSegment, WordTimestamp
 
 BoundaryPredicate = Callable[[Sequence[WordTimestamp]], bool]
 
 _TOKENIZER = Dictionary().tokenizer()
+
+# Morpheme categories that can head a bunsetsu. Function words (particles,
+# auxiliaries, suffixes, punctuation) always attach to the preceding unit.
+_BUNSETSU_HEAD_POS = {
+    "名詞",
+    "代名詞",
+    "動詞",
+    "形容詞",
+    "形状詞",
+    "副詞",
+    "連体詞",
+    "接続詞",
+    "感動詞",
+    "接頭辞",
+}
+
+# A noun or pronoun directly following a noun, pronoun, adnominal or prefix
+# continues the same bunsetsu (compound nouns such as 字幕テキスト, and
+# adnominal modification such as その企画).
+_NOUN_CHAIN_PREV_POS = {"名詞", "代名詞", "連体詞", "接頭辞"}
+
+_FILLER_PATTERN = FILLER_PATTERN
 
 
 def _default_boundary(words: Sequence[WordTimestamp]) -> bool:
@@ -31,6 +62,136 @@ def _default_boundary(words: Sequence[WordTimestamp]) -> bool:
 
 def _text(words: Sequence[WordTimestamp]) -> str:
     return "".join(word.word for word in words).strip()
+
+
+def _is_filler_morpheme(morpheme: object) -> bool:
+    pos = morpheme.part_of_speech()
+    if pos[0] != "感動詞":
+        return False
+    return pos[1] == "フィラー" or bool(
+        _FILLER_PATTERN.match(filler_core(morpheme.surface()))
+    )
+
+
+def _filler_char_spans(morphemes: Sequence[object]) -> list[tuple[int, int]]:
+    """Character spans of filler phrases, e.g. えー + と + 、 in えーと、."""
+    morphemes = list(morphemes)
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(morphemes):
+        if not _is_filler_morpheme(morphemes[index]):
+            index += 1
+            continue
+        end = index
+        while end + 1 < len(morphemes):
+            following = morphemes[end + 1]
+            if following.part_of_speech()[0] not in {"助詞", "助動詞", "補助記号"}:
+                break
+            combined = filler_core(
+                "".join(m.surface() for m in morphemes[index : end + 2])
+            )
+            if not _FILLER_PATTERN.match(combined):
+                break
+            end += 1
+        spans.append((morphemes[index].begin(), morphemes[end].end()))
+        index = end + 1
+    return spans
+
+
+def _is_bunsetsu_head(morpheme: object, previous: object) -> bool:
+    pos = morpheme.part_of_speech()
+    if pos[0] not in _BUNSETSU_HEAD_POS:
+        return False
+    prev_pos = previous.part_of_speech()
+    if pos[0] in {"名詞", "代名詞"} and prev_pos[0] in _NOUN_CHAIN_PREV_POS:
+        return False
+    if pos[1] == "非自立可能" and pos[0] in {"動詞", "形容詞"}:
+        # Non-independent verbs/adjectives lean on the preceding unit only
+        # when they follow a content word they attach to (ている, てくる),
+        # a て/で conjunctive particle, or a sahen noun (収録+し). Otherwise
+        # they head their own unit (あったら, 時間かかる, あの上げる).
+        if prev_pos[0] in {"動詞", "形容詞"}:
+            return False
+        if previous.surface() in {"て", "で"}:
+            return False
+        conjugation = pos[4] if len(pos) > 4 else ""
+        if prev_pos[0] == "名詞" and "サ行変格" in conjugation:
+            return False
+    return True
+
+
+def _bunsetsu_head_offsets(morphemes: Sequence[object], text_length: int) -> set[int]:
+    """Character offsets at which a new bunsetsu may start."""
+    heads = {0, text_length}
+    previous: object | None = None
+    for morpheme in morphemes:
+        if previous is not None and _is_bunsetsu_head(morpheme, previous):
+            heads.add(morpheme.begin())
+        previous = morpheme
+    return heads
+
+
+@dataclass
+class _Unit:
+    """Words that must stay in one segment: one bunsetsu or one filler."""
+
+    words: list[WordTimestamp]
+    is_filler: bool
+
+
+def _build_units(words: Sequence[WordTimestamp]) -> list[_Unit]:
+    """Group words into indivisible bunsetsu units and filler units.
+
+    A word whose timestamps straddle a filler phrase or a bunsetsu head
+    cannot be split, so it stays whole inside a single normal unit.
+    """
+    text = "".join(word.word for word in words)
+    morphemes = _TOKENIZER.tokenize(text, SplitMode.A)
+    heads = _bunsetsu_head_offsets(morphemes, len(text))
+    filler_spans = _filler_char_spans(morphemes)
+
+    # Whisper words can carry leading/trailing whitespace (" え"). Whitespace
+    # is not speech, so align word spans with the trimmed text; otherwise a
+    # word that starts a filler or bunsetsu no longer lines up with the
+    # morpheme spans and the unit is split at the wrong place.
+    word_spans: list[tuple[int, int]] = []
+    cursor = 0
+    for word in words:
+        leading = len(word.word) - len(word.word.lstrip())
+        trailing = len(word.word) - len(word.word.rstrip())
+        word_spans.append(
+            (cursor + leading, cursor + len(word.word) - trailing)
+        )
+        cursor += len(word.word)
+
+    def is_filler_word(index: int) -> bool:
+        begin, end = word_spans[index]
+        return any(begin >= start and end <= stop for start, stop in filler_spans)
+
+    units: list[_Unit] = []
+    current: list[WordTimestamp] = []
+    current_is_filler = False
+
+    def close_current() -> None:
+        nonlocal current
+        if current:
+            units.append(_Unit(list(current), current_is_filler))
+            current = []
+
+    for index, word in enumerate(words):
+        filler = is_filler_word(index)
+        if current and filler != current_is_filler:
+            close_current()
+        if not current:
+            current_is_filler = filler
+        current.append(word)
+        if filler:
+            continue
+        word_end = word_spans[index][1]
+        if word_end in heads:
+            close_current()
+    close_current()
+    return units
 
 
 def _make_segment(
@@ -59,7 +220,11 @@ def segment_raw(
     boundary_predicate: BoundaryPredicate = _default_boundary,
     track_index: int = 1,
 ) -> list[RefinedSegment]:
-    """Split a raw segment while preserving every word timestamp."""
+    """Split a raw segment at bunsetsu boundaries, isolating fillers.
+
+    Length and duration limits are applied between units, never inside one:
+    a unit that exceeds a limit on its own is emitted whole rather than cut.
+    """
     if max_characters <= 0 or max_duration <= 0 or preferred_duration <= 0:
         raise ValueError("segmentation limits must be positive")
     if preferred_duration > max_duration:
@@ -84,26 +249,97 @@ def segment_raw(
 
     result: list[RefinedSegment] = []
     current: list[WordTimestamp] = []
-    for word in source.words:
-        candidate = [*current, word]
-        candidate_text = _text(candidate)
-        candidate_duration = candidate[-1].end - candidate[0].start
-        exceeds_limit = (
-            len(candidate_text) > max_characters or candidate_duration > max_duration
-        )
-        if current and exceeds_limit:
-            result.append(_make_segment(source, len(result), current, track_index))
-            current = [word]
-            continue
 
-        current = candidate
-        reached_preferred_boundary = (
-            boundary_predicate(current) and candidate_duration >= preferred_duration
-        )
-        if reached_preferred_boundary:
+    def flush() -> None:
+        nonlocal current
+        if current:
             result.append(_make_segment(source, len(result), current, track_index))
             current = []
 
-    if current:
-        result.append(_make_segment(source, len(result), current, track_index))
+    def duration(words: Sequence[WordTimestamp]) -> float:
+        return words[-1].end - words[0].start
+
+    for unit in _build_units(source.words):
+        if unit.is_filler:
+            flush()
+            result.append(
+                _make_segment(source, len(result), unit.words, track_index)
+            )
+            continue
+        if current and (
+            len(_text([*current, *unit.words])) > max_characters
+            or duration([*current, *unit.words]) > max_duration
+        ):
+            flush()
+        current = [*current, *unit.words]
+        if len(_text(current)) > max_characters or duration(current) > max_duration:
+            # A single unit that exceeds the limits on its own: keep it whole.
+            flush()
+            continue
+        if boundary_predicate(current) and duration(current) >= preferred_duration:
+            flush()
+
+    flush()
     return result
+
+
+def segment_source(
+    raw_segments: Sequence[RawSegment],
+    max_characters: int = 20,
+    max_duration: float = 4.0,
+    preferred_duration: float = 3.5,
+    boundary_predicate: BoundaryPredicate = _default_boundary,
+    track_index: int = 1,
+) -> list[RefinedSegment]:
+    """Segment one source's whole word stream, ignoring raw segment edges.
+
+    Transcription segments are an artifact of the recognizer, not of the
+    speech: they can end in the middle of a word or bunsetsu. Merging the
+    words of every raw segment of a source before segmentation keeps slice
+    boundaries at bunsetsu boundaries across those edges too. Each refined
+    segment keeps the ``no_speech_prob`` of the raw segment its first word
+    came from.
+    """
+    raws = list(raw_segments)
+    if len(raws) <= 1 or any(not raw.words for raw in raws):
+        result: list[RefinedSegment] = []
+        for raw in raws:
+            result.extend(
+                segment_raw(
+                    raw,
+                    max_characters,
+                    max_duration,
+                    preferred_duration,
+                    boundary_predicate,
+                    track_index,
+                )
+            )
+        return result
+
+    words: list[WordTimestamp] = []
+    no_speech_by_word: list[float] = []
+    for raw in raws:
+        words.extend(raw.words)
+        no_speech_by_word.extend([raw.no_speech_prob] * len(raw.words))
+    merged = RawSegment(
+        id=raws[0].id,
+        start=min(raw.start for raw in raws),
+        end=max(raw.end for raw in raws),
+        text="",
+        no_speech_prob=raws[0].no_speech_prob,
+        words=words,
+        source_id=raws[0].source_id,
+    )
+    refined = segment_raw(
+        merged,
+        max_characters,
+        max_duration,
+        preferred_duration,
+        boundary_predicate,
+        track_index,
+    )
+    word_index = 0
+    for segment in refined:
+        segment.no_speech_prob = no_speech_by_word[word_index]
+        word_index += len(segment.words)
+    return refined

@@ -7,6 +7,25 @@ from .models import RefinedSegment
 
 DEFAULT_FILLERS = ("えーと", "あのー", "んー", "まー", "えっ")
 
+_FILLER_PUNCTUATION = "、。，．！？!?,.・…"
+
+# Spoken filler forms as a whole utterance, including variants the plain
+# substring list misses (えっと, あの, えー, そのー, うーん, ...). Applied to
+# a segment's filler core, so ordinary speech is never matched.
+FILLER_PATTERN = re.compile(
+    r"^(?:えー+と|えー+|えっと|あのー*|ああ|あ|んー+|ん|まー+|まあ|うーん|うん|あー+|えっ|そのー*)$"
+)
+
+
+def filler_core(text: str) -> str:
+    """Reduce text to its filler core by dropping whitespace and punctuation."""
+    return re.sub(r"\s+", "", text).strip(_FILLER_PUNCTUATION)
+
+
+def is_filler_text(text: str) -> bool:
+    """Return True when the whole text is a single filler utterance."""
+    return bool(FILLER_PATTERN.match(filler_core(text)))
+
 
 @dataclass(frozen=True)
 class Evaluation:
@@ -42,6 +61,8 @@ def evaluate_segment(
     matched_fillers = [filler for filler in fillers if filler in segment.text]
     if matched_fillers:
         reasons.append(f"フィラー ({'、'.join(matched_fillers)})")
+    elif is_filler_text(segment.text):
+        reasons.append(f"フィラー ({filler_core(segment.text)})")
 
     if segment.no_speech_prob > no_speech_threshold:
         reasons.append(f"非音声確率 {segment.no_speech_prob:.2f}")
