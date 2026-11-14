@@ -74,6 +74,25 @@ def test_sensevoice_transcribes_timestamped_text(
     assert segments[0].words[-1].end == 1.0
 
 
+def test_sensevoice_reports_prepare_phase_before_reading_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = SimpleNamespace(
+        text="<|ja|><|NEUTRAL|>こんにちは",
+        tokens=list("こんにちは"),
+        timestamps=[0.0, 0.2, 0.4, 0.6, 0.8],
+        durations=[0.2, 0.2, 0.2, 0.2, 0.2],
+    )
+    _install_sherpa_mocks(monkeypatch, result)
+    phases: list[tuple[str, str]] = []
+
+    SenseVoiceTranscriber().transcribe_sources(
+        ["episode.wav"], phase_callback=lambda *values: phases.append(values)
+    )
+
+    assert phases == [("episode.wav", "読み込み・リサンプリング")]
+
+
 def test_sensevoice_requires_word_timestamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

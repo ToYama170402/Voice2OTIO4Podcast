@@ -6,6 +6,7 @@ from typing import Protocol
 from .models import RawSegment, WordTimestamp
 
 ProgressCallback = Callable[[str, float, float | None], None]
+PhaseCallback = Callable[[str, str], None]
 TranscriptionResult = tuple[str, str, list[RawSegment], float | None]
 
 
@@ -18,6 +19,7 @@ class Transcriber(Protocol):
         self,
         audio_paths: list[str],
         progress_callback: ProgressCallback | None = None,
+        phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]: ...
 
 
@@ -66,11 +68,14 @@ class FasterWhisperTranscriber:
         self,
         audio_paths: list[str],
         progress_callback: ProgressCallback | None = None,
+        phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]:
         """Transcribe one file per source and retain detected media durations."""
         results: list[TranscriptionResult] = []
         for index, audio_path in enumerate(audio_paths, start=1):
             source_id = f"source_{index}"
+            if phase_callback is not None:
+                phase_callback(audio_path, "読み込み")
             segments, info = self._model.transcribe(
                 audio_path,
                 language="ja",
