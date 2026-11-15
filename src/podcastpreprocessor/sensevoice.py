@@ -10,7 +10,7 @@ from typing import Any
 from .audio_io import prepare_audio
 from .model_manager import SenseVoiceModelManager
 from .models import RawSegment, WordTimestamp
-from .transcriber import ProgressCallback, TranscriptionResult
+from .transcriber import PhaseCallback, ProgressCallback, TranscriptionResult
 from .vad import speech_segments_to_regions, vad_model_config
 
 _TAG_PATTERN = re.compile(r"<\|[^|]+\|>")
@@ -107,12 +107,13 @@ class SenseVoiceTranscriber:
         self,
         audio_paths: list[str],
         progress_callback: ProgressCallback | None = None,
+        phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]:
         results: list[TranscriptionResult] = []
         for index, audio_path in enumerate(audio_paths, start=1):
             source_id = f"source_{index}"
             segments, duration = self._transcribe_one(
-                audio_path, source_id, progress_callback
+                audio_path, source_id, progress_callback, phase_callback
             )
             results.append((source_id, audio_path, segments, duration))
         return results
@@ -122,12 +123,15 @@ class SenseVoiceTranscriber:
         audio_path: str,
         source_id: str,
         progress_callback: ProgressCallback | None = None,
+        phase_callback: PhaseCallback | None = None,
     ) -> tuple[list[RawSegment], float]:
         prepared_path = prepare_audio(
             audio_path,
             cache_dir=Path(self._audio_cache_dir) if self._audio_cache_dir else None,
             soundfile_module=self._soundfile,
         )
+        if phase_callback is not None:
+            phase_callback(audio_path, "読み込み・リサンプリング")
         audio, sample_rate = self._soundfile.read(
             prepared_path, dtype="float32", always_2d=True
         )
@@ -138,8 +142,10 @@ class SenseVoiceTranscriber:
         duration = len(audio) / sample_rate
         chunk_samples = max(1, round(self._chunk_duration_s * sample_rate))
         segments: list[RawSegment] = []
-        regions = (
-            _detect_sherpa_speech_regions(
+        if self._vad:
+            if phase_callback is not None:
+                phase_callback(audio_path, "音声区間の検出")
+            regions = _detect_sherpa_speech_regions(
                 self._sherpa_onnx,
                 audio,
                 sample_rate,
@@ -152,9 +158,8 @@ class SenseVoiceTranscriber:
                 provider=self._provider,
                 num_threads=self._num_threads,
             )
-            if self._vad
-            else [(0, len(audio))]
-        )
+        else:
+            regions = [(0, len(audio))]
         if not regions:
             raise RuntimeError(f"VAD detected no speech: {audio_path}")
         if progress_callback is not None:

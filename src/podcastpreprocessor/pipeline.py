@@ -12,7 +12,7 @@ from .models import (
     seconds_to_frame_range,
 )
 from .otio import write_otio
-from .segmentator import segment_raw
+from .segmentator import segment_source
 from .srt import write_srt
 
 
@@ -51,37 +51,38 @@ def process_sources(
     source_list = list(sources)
     for source, raw_segments in source_list:
         previous_end: float | None = None
-        for raw_segment in raw_segments:
-            for refined in segment_raw(raw_segment, track_index=source.track_index):
-                frame_range = seconds_to_frame_range(
-                    refined.start,
-                    refined.end,
-                    fps,
-                    source.duration_frames,
-                )
-                if frame_range is None:
-                    previous_end = refined.end
-                    continue
-                start_frame, end_frame = frame_range
-                evaluation = evaluate_segment(refined, previous_end=previous_end)
-                processed.append(
-                    ProcessedSegment(
-                        segment_id=refined.segment_id,
-                        track_index=refined.track_index,
-                        start_frame=start_frame,
-                        end_frame=end_frame,
-                        in_frame=start_frame,
-                        out_frame=end_frame,
-                        subtitle_text=refined.text,
-                        is_cut_candidate=evaluation.is_cut_candidate,
-                        flag_label=evaluation.flag_label,
-                        marker_reason=evaluation.marker_reason,
-                        color_label="Red" if evaluation.is_cut_candidate else "None",
-                        source_id=source.source_id,
-                        audio_path=source.path,
-                    )
-                )
+        for refined in segment_source(
+            list(raw_segments), track_index=source.track_index
+        ):
+            frame_range = seconds_to_frame_range(
+                refined.start,
+                refined.end,
+                fps,
+                source.duration_frames,
+            )
+            if frame_range is None:
                 previous_end = refined.end
+                continue
+            start_frame, end_frame = frame_range
+            evaluation = evaluate_segment(refined, previous_end=previous_end)
+            processed.append(
+                ProcessedSegment(
+                    segment_id=refined.segment_id,
+                    track_index=refined.track_index,
+                    start_frame=start_frame,
+                    end_frame=end_frame,
+                    in_frame=start_frame,
+                    out_frame=end_frame,
+                    subtitle_text=refined.text,
+                    is_cut_candidate=evaluation.is_cut_candidate,
+                    flag_label=evaluation.flag_label,
+                    marker_reason=evaluation.marker_reason,
+                    color_label="Red" if evaluation.is_cut_candidate else "None",
+                    source_id=source.source_id,
+                    audio_path=source.path,
+                )
+            )
+            previous_end = refined.end
     if not processed:
         raise ValueError("transcription produced no segments")
     write_otio(

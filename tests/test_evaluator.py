@@ -22,6 +22,21 @@ def test_pause_threshold_is_strictly_greater_than_point_four() -> None:
     assert not result.is_cut_candidate
 
 
+def test_evaluator_detects_standalone_filler_variants() -> None:
+    # あの is not in the substring filler list, but a segment that is only
+    # a filler utterance (as produced by filler isolation) must be flagged.
+    result = evaluate_segment(segment("あの、"))
+
+    assert result.is_cut_candidate
+    assert result.reasons == ("フィラー (あの)",)
+
+
+def test_evaluator_does_not_flag_ordinary_speech() -> None:
+    result = evaluate_segment(segment("その話をしました"))
+
+    assert not result.is_cut_candidate
+
+
 def test_evaluator_supports_custom_regex() -> None:
     result = evaluate_text_pattern(segment("そのー話", end=2.0), r"そのー")
 
