@@ -8,6 +8,7 @@ from typing import TextIO
 from .models import AudioSource, seconds_to_frame
 from .pipeline import process_sources
 from .factory import build_transcriber
+from .filler_detector import detect_filler_candidates
 
 
 class _ProgressDisplay:
@@ -147,6 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fps", type=int, default=30, help="timeline frame rate")
     parser.add_argument("--sequence-name", default="Podcast_Timeline")
+    parser.add_argument(
+        "--acoustic-fillers",
+        action="store_true",
+        help="detect filler candidates from the audio signal and mark them "
+        "on the audio clips (works even when the transcription backend "
+        "drops fillers, e.g. SenseVoice)",
+    )
     return parser
 
 
@@ -199,6 +207,19 @@ def main(argv: list[str] | None = None) -> int:
         sources.append(
             (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
         )
+    filler_regions = None
+    if args.acoustic_fillers:
+        try:
+            filler_regions = {}
+            for source, _raw in sources:
+                regions = detect_filler_candidates(source.path)
+                filler_regions[source.source_id] = regions
+                sys.stderr.write(
+                    f"Acoustic filler candidates in "
+                    f"{os.path.basename(source.path)}: {len(regions)}\n"
+                )
+        except RuntimeError as error:
+            parser.error(str(error))
     try:
         process_sources(
             sources,
@@ -206,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             args.fps,
             args.sequence_name,
             args.srt_output,
+            filler_regions=filler_regions,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))
