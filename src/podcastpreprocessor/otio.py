@@ -218,19 +218,33 @@ def generate_otio(
             )
             if segment is not None:
                 for marker in segment.clip_markers:
+                    marked_range = otio.opentime.TimeRange(
+                        start_time=otio.opentime.RationalTime(
+                            audio_slice.source_in_frame + marker.start_frame,
+                            fps,
+                        ),
+                        duration=otio.opentime.RationalTime(
+                            marker.end_frame - marker.start_frame, fps
+                        ),
+                    )
                     clip.markers.append(
                         otio.schema.Marker(
                             name=marker.name,
                             color="YELLOW",
-                            marked_range=otio.opentime.TimeRange(
-                                start_time=otio.opentime.RationalTime(
-                                    audio_slice.source_in_frame + marker.start_frame,
-                                    fps,
-                                ),
-                                duration=otio.opentime.RationalTime(
-                                    marker.end_frame - marker.start_frame, fps
-                                ),
-                            ),
+                            marked_range=marked_range,
+                        )
+                    )
+                    # Also mirror the marker onto the timeline itself.
+                    # Audio slices tile the timeline continuously from
+                    # frame 0, so the source-frame position is also the
+                    # timeline position. Some Resolve versions do not
+                    # surface clip markers from OTIO imports, while
+                    # timeline (stack) markers are imported reliably.
+                    timeline.tracks.markers.append(
+                        otio.schema.Marker(
+                            name=marker.name,
+                            color="YELLOW",
+                            marked_range=marked_range,
                         )
                     )
             audio_track.append(clip)

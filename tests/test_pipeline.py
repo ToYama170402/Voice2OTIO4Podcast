@@ -96,3 +96,36 @@ def test_process_sources_marks_acoustic_filler_candidates_on_audio_clips(
     marked = clip.markers[0].marked_range
     assert marked.start_time.value == 30
     assert marked.duration.value == 18
+
+
+def test_process_sources_mirrors_filler_markers_onto_timeline(tmp_path) -> None:
+    """Timeline (stack) markers are the form Resolve reliably imports."""
+    from podcastpreprocessor.filler_detector import FillerRegion
+
+    source = AudioSource("source_1", "C:/audio/a.wav", 1, 90)
+    raw = [
+        RawSegment(
+            1,
+            0.0,
+            3.0,
+            "今日は収録です",
+            0.0,
+            [WordTimestamp("今日は収録です", 0.0, 3.0, 1.0)],
+            source_id="source_1",
+        )
+    ]
+    output_path = tmp_path / "timeline.otio"
+
+    process_sources(
+        [(source, raw)],
+        str(output_path),
+        filler_regions={"source_1": [FillerRegion(1.0, 1.6)]},
+    )
+
+    timeline = otio.adapters.read_from_file(str(output_path))
+    stack_markers = list(timeline.tracks.markers)
+    assert len(stack_markers) == 1
+    assert stack_markers[0].name == "フィラー候補"
+    assert stack_markers[0].color == "YELLOW"
+    assert stack_markers[0].marked_range.start_time.value == 30
+    assert stack_markers[0].marked_range.duration.value == 18
