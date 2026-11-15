@@ -61,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--sensevoice-cache-dir", help="SenseVoice model cache directory"
     )
     parser.add_argument(
+        "--sensevoice-audio-cache-dir",
+        help="converted-audio cache directory (default: ~/.cache/podcastpreprocessor/converted)",
+    )
+    parser.add_argument(
+        "--sensevoice-audio-cache-dir",
+        help="converted-audio cache directory (default: ~/.cache/podcastpreprocessor/converted)",
+    )
+    parser.add_argument(
         "--sensevoice-num-threads",
         type=int,
         default=4,
@@ -179,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             args.sensevoice_vad_min_silence_s,
             args.sensevoice_vad_min_speech_s,
             args.sensevoice_vad_max_speech_s,
+            sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
         ).transcribe_sources(args.audio, progress_callback=progress)
     except RuntimeError as error:
         parser.error(str(error))
