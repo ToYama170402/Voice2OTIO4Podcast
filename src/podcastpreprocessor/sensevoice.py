@@ -2,6 +2,7 @@
 
 from importlib import import_module
 import math
+from pathlib import Path
 import re
 from types import SimpleNamespace
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from .model_manager import SenseVoiceModelManager
 from .models import RawSegment, WordTimestamp
 from .transcriber import ProgressCallback, TranscriptionResult
+from .transcript_cache import ChunkCache, cache_key
 from .vad import speech_segments_to_regions, vad_model_config
 
 _TAG_PATTERN = re.compile(r"<\|[^|]+\|>")
@@ -34,6 +36,7 @@ class SenseVoiceTranscriber:
         vad_min_silence_duration: float = 0.25,
         vad_min_speech_duration: float = 0.1,
         vad_max_speech_duration: float = 120.0,
+        transcript_cache_dir: str | None = None,
     ) -> None:
         if num_threads <= 0:
             raise ValueError("num_threads must be positive")
@@ -93,6 +96,10 @@ class SenseVoiceTranscriber:
         self._vad_min_silence_duration = vad_min_silence_duration
         self._vad_min_speech_duration = vad_min_speech_duration
         self._vad_max_speech_duration = vad_max_speech_duration
+        self._quantization = quantization
+        self._language = language
+        self._use_itn = use_itn
+        self._transcript_cache_dir = transcript_cache_dir
 
     def transcribe(
         self, audio_path: str, source_id: str = "source_1"
@@ -148,20 +155,39 @@ class SenseVoiceTranscriber:
         )
         if not regions:
             raise RuntimeError(f"VAD detected no speech: {audio_path}")
-        if progress_callback is not None:
-            progress_callback(audio_path, 0.0, duration)
+        # Build the full chunk plan first: chunk indices are the chunk
+        # cache keys, so they must be stable across runs.
+        plan: list[tuple[int, int]] = []
         for region_start, region_end in regions:
-            chunk_ranges = (
-                [(region_start, region_end)]
-                if self._vad
-                else [
+            if self._vad:
+                plan.append((region_start, region_end))
+            else:
+                plan.extend(
                     (chunk_start, min(chunk_start + chunk_samples, region_end))
                     for chunk_start in range(region_start, region_end, chunk_samples)
-                ]
-            )
-            for chunk_start, chunk_end in chunk_ranges:
-                offset = chunk_start / sample_rate
-                chunk_duration = (chunk_end - chunk_start) / sample_rate
+                )
+        chunk_cache: ChunkCache | None = None
+        cached_chunks: dict[int, RawSegment | None] = {}
+        if self._transcript_cache_dir is not None:
+            try:
+                key = cache_key(audio_path, self._chunk_settings())
+                chunk_cache = ChunkCache(
+                    Path(self._transcript_cache_dir) / "partials" / f"{key}.jsonl"
+                )
+                cached_chunks = chunk_cache.load()
+            except OSError:
+                chunk_cache = None
+        if progress_callback is not None:
+            progress_callback(audio_path, 0.0, duration)
+        for chunk_index, (chunk_start, chunk_end) in enumerate(plan):
+            offset = chunk_start / sample_rate
+            chunk_duration = (chunk_end - chunk_start) / sample_rate
+            segment: RawSegment | None
+            if chunk_index in cached_chunks:
+                segment = cached_chunks[chunk_index]
+                if segment is not None:
+                    segment.source_id = source_id
+            else:
                 stream = self._recognizer.create_stream()
                 stream.accept_waveform(sample_rate, audio[chunk_start:chunk_end])
                 try:
@@ -173,21 +199,44 @@ class SenseVoiceTranscriber:
                         " --sensevoice-chunk-duration-s を短くして再試行してください。"
                     ) from error
                 result = stream.result
-                if str(_value(result, "text", "")).strip():
-                    segments.append(
-                        _to_raw_segment(
-                            result,
-                            source_id,
-                            offset,
-                            offset + chunk_duration,
-                            len(segments),
-                        )
+                segment = (
+                    _to_raw_segment(
+                        result,
+                        source_id,
+                        offset,
+                        offset + chunk_duration,
+                        len(segments),
                     )
-                if progress_callback is not None:
-                    progress_callback(audio_path, offset + chunk_duration, duration)
+                    if str(_value(result, "text", "")).strip()
+                    else None
+                )
+                if chunk_cache is not None:
+                    chunk_cache.store(chunk_index, segment)
+            if segment is not None:
+                segments.append(segment)
+            if progress_callback is not None:
+                progress_callback(audio_path, offset + chunk_duration, duration)
         if not segments:
             raise RuntimeError(f"transcription produced no speech: {audio_path}")
+        if chunk_cache is not None:
+            chunk_cache.clear()
         return segments, duration
+
+    def _chunk_settings(self) -> dict[str, object]:
+        """Settings that determine chunk boundaries and chunk content."""
+        return {
+            "backend": "sensevoice",
+            "quantization": self._quantization,
+            "language": self._language,
+            "use_itn": self._use_itn,
+            "chunk_duration_s": self._chunk_duration_s,
+            "vad": self._vad,
+            "vad_threshold": self._vad_threshold,
+            "vad_min_silence_duration": self._vad_min_silence_duration,
+            "vad_min_speech_duration": self._vad_min_speech_duration,
+            "vad_max_speech_duration": self._vad_max_speech_duration,
+            "vad_padding_s": self._vad_padding_s,
+        }
 
     def _to_mono_16khz(self, audio: Any, sample_rate: int) -> Any:
         mono = audio[:, 0]
