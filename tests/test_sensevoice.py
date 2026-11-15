@@ -1,3 +1,4 @@
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -258,3 +259,69 @@ def test_detect_sherpa_speech_regions_feeds_windows_and_flushes() -> None:
     )
 
     assert regions == [(0, 2)]
+
+
+def test_sensevoice_resumes_from_chunk_cache_after_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sys as _sys
+    from types import ModuleType as _MT, SimpleNamespace as _SN
+
+    result = _SN(text="こんにちは", tokens=["こ"], timestamps=[0.0], durations=[0.1])
+    state = {"calls": 0, "fail_after": 2}
+    sherpa_onnx = _MT("sherpa_onnx")
+    soundfile = _MT("soundfile")
+
+    class FakeStream:
+        def __init__(self) -> None:
+            self.result = result
+
+        def accept_waveform(self, sample_rate: int, audio: object) -> None:
+            pass
+
+    class FakeRecognizer:
+        @classmethod
+        def from_sense_voice(cls, **kwargs: object) -> "FakeRecognizer":
+            return cls()
+
+        def create_stream(self) -> FakeStream:
+            return FakeStream()
+
+        def decode_stream(self, stream: FakeStream) -> None:
+            state["calls"] += 1
+            if state["calls"] > state["fail_after"]:
+                raise RuntimeError("simulated crash")
+
+    sherpa_onnx.OfflineRecognizer = FakeRecognizer  # type: ignore[attr-defined]
+    soundfile.read = lambda *args, **kwargs: (FakeAudio(), 1000)  # type: ignore[attr-defined]
+    monkeypatch.setitem(_sys.modules, "sherpa_onnx", sherpa_onnx)
+    monkeypatch.setitem(_sys.modules, "soundfile", soundfile)
+    monkeypatch.setattr(
+        "podcastpreprocessor.sensevoice.SenseVoiceModelManager.resolve",
+        lambda *args, **kwargs: ("model.int8.onnx", "tokens.txt"),
+    )
+    audio = tmp_path / "episode.wav"
+    audio.write_bytes(b"fake")
+    cache_dir = tmp_path / "cache"
+
+    transcriber = SenseVoiceTranscriber(
+        chunk_duration_s=0.3, transcript_cache_dir=str(cache_dir)
+    )
+    with pytest.raises(RuntimeError):
+        transcriber.transcribe(str(audio))
+    partials = list((cache_dir / "partials").glob("*.jsonl"))
+    assert len(partials) == 1
+
+    state["fail_after"] = 100
+    state["calls"] = 0
+    transcriber = SenseVoiceTranscriber(
+        chunk_duration_s=0.3, transcript_cache_dir=str(cache_dir)
+    )
+    segments = transcriber.transcribe(str(audio))
+
+    # Only the two unfinished chunks are decoded on the second run.
+    assert state["calls"] == 2
+    assert [segment.start for segment in segments] == [0.0, 0.3, 0.6, 0.9]
+    assert [segment.id for segment in segments] == [0, 1, 2, 3]
+    # The journal is cleaned up once the transcription completes.
+    assert list((cache_dir / "partials").glob("*.jsonl")) == []
