@@ -883,6 +883,9 @@ dev = [
     { name = "pytest" },
 ]
 sensevoice = [
+    { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "av", version = "19.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -892,6 +895,7 @@ sensevoice = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", marker = "extra == 'sensevoice'", specifier = ">=14" },
     { name = "faster-whisper", specifier = ">=1.1.0" },
     { name = "numpy", marker = "extra == 'sensevoice'", specifier = ">=1.24" },
     { name = "onnxruntime", specifier = ">=1.14.1,<1.24" },

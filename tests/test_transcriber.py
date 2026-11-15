@@ -39,6 +39,31 @@ def test_transcribe_sources_reports_progress(monkeypatch: pytest.MonkeyPatch) ->
     ]
 
 
+def test_transcribe_sources_reports_prepare_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    faster_whisper = ModuleType("faster_whisper")
+
+    class FakeWhisperModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def transcribe(
+            self, audio_path: str, **kwargs: object
+        ) -> tuple[object, object]:
+            return [], SimpleNamespace(duration=10.0)
+
+    faster_whisper.WhisperModel = FakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+    phases: list[tuple[str, str]] = []
+
+    FasterWhisperTranscriber().transcribe_sources(
+        ["episode.wav"], phase_callback=lambda *values: phases.append(values)
+    )
+
+    assert phases == [("episode.wav", "読み込み")]
+
+
 def test_transcriber_discards_zero_duration_words(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

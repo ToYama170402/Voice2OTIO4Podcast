@@ -1,15 +1,13 @@
 """Command-line interface for PodcastPreprocessor."""
 
 import argparse
-import os
 import sys
-from typing import TextIO
 
 from .models import AudioSource, seconds_to_frame
 from .pipeline import process_sources
 from .factory import build_transcriber
 from .filler_detector import detect_filler_candidates
-
+from .progress import ProgressReporter
 
 class _ProgressDisplay:
     def __init__(self, stream: TextIO) -> None:
@@ -28,7 +26,6 @@ class _ProgressDisplay:
         if ratio >= 1.0:
             self._stream.write("\n")
         self._stream.flush()
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -60,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sensevoice-cache-dir", help="SenseVoice model cache directory"
+    )
+    parser.add_argument(
+        "--sensevoice-audio-cache-dir",
+        help="converted-audio cache directory (default: ~/.cache/podcastpreprocessor/converted)",
     )
     parser.add_argument(
         "--sensevoice-num-threads",
@@ -162,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        progress = _ProgressDisplay(sys.stderr)
+        progress = ProgressReporter(sys.stderr, total_files=len(args.audio))
         transcribed = build_transcriber(
             args.backend,
             args.model,
@@ -187,7 +188,10 @@ def main(argv: list[str] | None = None) -> int:
             args.sensevoice_vad_min_silence_s,
             args.sensevoice_vad_min_speech_s,
             args.sensevoice_vad_max_speech_s,
-        ).transcribe_sources(args.audio, progress_callback=progress)
+            sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
+        ).transcribe_sources(
+            args.audio, progress_callback=progress, phase_callback=progress.phase
+        )
     except RuntimeError as error:
         parser.error(str(error))
     sources: list[tuple[AudioSource, list]] = []
@@ -221,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as error:
             parser.error(str(error))
     try:
+        progress.start_processing()
         process_sources(
             sources,
             args.output,
@@ -231,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    progress.finish()
     return 0
 
 
