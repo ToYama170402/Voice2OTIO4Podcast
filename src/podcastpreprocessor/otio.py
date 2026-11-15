@@ -190,7 +190,16 @@ def generate_otio(
                     fps,
                 )
 
-        reference = otio.schema.ExternalReference(target_url=source.path)
+        # The available_range matters for marker import in DaVinci
+        # Resolve: without it, Resolve cannot map clip markers given in
+        # source time onto the media and silently drops them.
+        reference = otio.schema.ExternalReference(
+            target_url=source.path,
+            available_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, fps),
+                duration=otio.opentime.RationalTime(source.duration_frames, fps),
+            ),
+        )
         for audio_slice in build_audio_slices(
             segment_list, source.source_id, source.duration_frames
         ):

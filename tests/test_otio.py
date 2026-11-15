@@ -70,6 +70,15 @@ def test_generate_otio_builds_tracks_links_and_audio_reference(tmp_path) -> None
     assert timeline.tracks[0][1].metadata["marker_reason"] == "判定: フィラー (えーと)"
     assert timeline.tracks[0][1].markers[0].name == "カット候補"
     assert timeline.tracks[2][0].media_reference.target_url == "C:/audio/speaker_a.wav"
+    # Resolve drops clip markers when the media reference has no
+    # available_range, so the audio reference must carry the full
+    # source range.
+    assert timeline.tracks[2][0].media_reference.available_range == (
+        otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0, 30),
+            duration=otio.opentime.RationalTime(90, 30),
+        )
+    )
 
     output_path = tmp_path / "timeline.otio"
     write_otio(str(output_path), segments, [source])
