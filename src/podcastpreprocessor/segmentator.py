@@ -139,6 +139,60 @@ class _Unit:
     is_filler: bool
 
 
+# Sudachi rejects inputs longer than 49149 bytes, so a whole-source
+# transcript (an hour of speech is ~50k characters) cannot be tokenized in
+# one call. Tokenize in chunks of words instead: soft chunks close at a
+# sentence end or a pause once they pass the soft limit, and never exceed
+# the hard limit (10000 chars stay below the byte limit even at 4 bytes
+# per character).
+_TOKENIZE_SOFT_LIMIT = 6000
+_TOKENIZE_HARD_LIMIT = 10000
+_CHUNK_PAUSE_SECONDS = 0.8
+
+
+def _tokenize_chunks(
+    words: Sequence[WordTimestamp],
+) -> tuple[set[int], list[tuple[int, int]]]:
+    """Bunsetsu head offsets and filler spans over the whole word stream."""
+    heads: set[int] = set()
+    filler_spans: list[tuple[int, int]] = []
+    chunk_start = 0
+    chunk_chars = 0
+    char_offset = 0
+
+    def flush(end_index: int) -> None:
+        nonlocal chunk_start, chunk_chars
+        chunk_words = words[chunk_start:end_index]
+        if not chunk_words:
+            return
+        text = "".join(word.word for word in chunk_words)
+        start_offset = char_offset - len(text)
+        morphemes = _TOKENIZER.tokenize(text, SplitMode.A)
+        heads.update(
+            start_offset + head
+            for head in _bunsetsu_head_offsets(morphemes, len(text))
+        )
+        filler_spans.extend(
+            (start_offset + begin, start_offset + end)
+            for begin, end in _filler_char_spans(morphemes)
+        )
+        chunk_start = end_index
+        chunk_chars = 0
+
+    for index, word in enumerate(words):
+        chunk_chars += len(word.word)
+        char_offset += len(word.word)
+        if index + 1 < len(words):
+            sentence_end = word.word.rstrip().endswith(("。", "！", "？", "!", "?"))
+            pause = words[index + 1].start - word.end >= _CHUNK_PAUSE_SECONDS
+            if chunk_chars >= _TOKENIZE_HARD_LIMIT or (
+                chunk_chars >= _TOKENIZE_SOFT_LIMIT and (sentence_end or pause)
+            ):
+                flush(index + 1)
+    flush(len(words))
+    return heads, filler_spans
+
+
 def _build_units(words: Sequence[WordTimestamp]) -> list[_Unit]:
     """Group words into indivisible bunsetsu units and filler units.
 
@@ -146,9 +200,8 @@ def _build_units(words: Sequence[WordTimestamp]) -> list[_Unit]:
     cannot be split, so it stays whole inside a single normal unit.
     """
     text = "".join(word.word for word in words)
-    morphemes = _TOKENIZER.tokenize(text, SplitMode.A)
-    heads = _bunsetsu_head_offsets(morphemes, len(text))
-    filler_spans = _filler_char_spans(morphemes)
+    heads, filler_spans = _tokenize_chunks(words)
+    heads.add(len(text))
 
     # Whisper words can carry leading/trailing whitespace (" え"). Whitespace
     # is not speech, so align word spans with the trimmed text; otherwise a

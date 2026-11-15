@@ -130,3 +130,22 @@ def test_segmentator_handles_missing_word_timestamps() -> None:
 
     assert len(segments) == 1
     assert segments[0].text == "音声なし"
+
+
+def test_segment_source_handles_text_beyond_sudachi_input_limit() -> None:
+    # One hour of speech is ~50k characters; Sudachi rejects inputs over
+    # 49149 bytes, so the merged source text must be tokenized in chunks.
+    phrase = "今日はいい天気ですね。"
+    words = []
+    t = 0.0
+    for _ in range(3000):
+        for ch in phrase:
+            words.append(WordTimestamp(ch, t, t + 0.09, 1.0))
+            t += 0.1
+    source = RawSegment(9, 0.0, t, phrase * 3000, 0.0, words)
+
+    segments = segment_source([source])
+
+    assert len(segments) > 100
+    assert sum(len(item.words) for item in segments) == len(words)
+    assert all(item.text for item in segments)
