@@ -4,32 +4,13 @@ import argparse
 import os
 from pathlib import Path
 import sys
-from typing import TextIO
 
 from .models import AudioSource, seconds_to_frame
 from .pipeline import process_sources
 from .factory import build_transcriber
+from .filler_detector import detect_filler_candidates
+from .progress import ProgressReporter
 from .transcript_cache import default_cache_dir, transcribe_sources_cached
-
-
-class _ProgressDisplay:
-    def __init__(self, stream: TextIO) -> None:
-        self._stream = stream
-        self._enabled = stream.isatty()
-
-    def __call__(self, audio_path: str, elapsed: float, duration: float | None) -> None:
-        if not self._enabled or duration is None or duration <= 0:
-            return
-        ratio = min(max(elapsed / duration, 0.0), 1.0)
-        width = 30
-        filled = int(width * ratio)
-        bar = "#" * filled + "-" * (width - filled)
-        name = os.path.basename(audio_path)
-        self._stream.write(f"\rTranscribing {name}: [{bar}] {ratio:>6.1%}")
-        if ratio >= 1.0:
-            self._stream.write("\n")
-        self._stream.flush()
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -61,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sensevoice-cache-dir", help="SenseVoice model cache directory"
+    )
+    parser.add_argument(
+        "--sensevoice-audio-cache-dir",
+        help="converted-audio cache directory (default: ~/.cache/podcastpreprocessor/converted)",
     )
     parser.add_argument(
         "--sensevoice-num-threads",
@@ -150,6 +135,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=30, help="timeline frame rate")
     parser.add_argument("--sequence-name", default="Podcast_Timeline")
     parser.add_argument(
+        "--acoustic-fillers",
+        action="store_true",
+        help="detect filler candidates from the audio signal and mark them "
+        "on the audio clips (works even when the transcription backend "
+        "drops fillers, e.g. SenseVoice)",
+    )
+    parser.add_argument(
         "--cache-dir",
         default=None,
         help="transcript cache directory (default: ~/.cache/podcastpreprocessor/transcripts)",
@@ -166,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        progress = _ProgressDisplay(sys.stderr)
+        progress = ProgressReporter(sys.stderr, total_files=len(args.audio))
         settings = {
             "backend": args.backend,
             "model": args.model,
@@ -220,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.sensevoice_vad_min_silence_s,
                 args.sensevoice_vad_min_speech_s,
                 args.sensevoice_vad_max_speech_s,
+                sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
                 sensevoice_transcript_cache_dir=(
                     str(cache_dir) if cache_dir is not None else None
                 ),
@@ -236,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             settings,
             cache_dir,
             progress_callback=progress,
+            phase_callback=progress.phase,
             on_cache_hit=_on_cache_hit,
         )
     except RuntimeError as error:
@@ -257,16 +251,32 @@ def main(argv: list[str] | None = None) -> int:
         sources.append(
             (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
         )
+    filler_regions = None
+    if args.acoustic_fillers:
+        try:
+            filler_regions = {}
+            for source, _raw in sources:
+                regions = detect_filler_candidates(source.path)
+                filler_regions[source.source_id] = regions
+                sys.stderr.write(
+                    f"Acoustic filler candidates in "
+                    f"{os.path.basename(source.path)}: {len(regions)}\n"
+                )
+        except RuntimeError as error:
+            parser.error(str(error))
     try:
+        progress.start_processing()
         process_sources(
             sources,
             args.output,
             args.fps,
             args.sequence_name,
             args.srt_output,
+            filler_regions=filler_regions,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    progress.finish()
     return 0
 
 

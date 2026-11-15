@@ -21,7 +21,12 @@ import os
 from pathlib import Path
 
 from .models import RawSegment, WordTimestamp
-from .transcriber import ProgressCallback, Transcriber, TranscriptionResult
+from .transcriber import (
+    PhaseCallback,
+    ProgressCallback,
+    Transcriber,
+    TranscriptionResult,
+)
 
 CACHE_VERSION = 1
 
@@ -131,6 +136,7 @@ def transcribe_sources_cached(
     settings: Mapping[str, object],
     cache_dir: Path | None,
     progress_callback: ProgressCallback | None = None,
+    phase_callback: PhaseCallback | None = None,
     on_cache_hit: Callable[[str], None] | None = None,
 ) -> list[TranscriptionResult]:
     """Transcribe each file, reusing cached results whenever possible.
@@ -162,7 +168,9 @@ def transcribe_sources_cached(
         if transcriber is None:
             transcriber = build_transcriber()
         transcribed = transcriber.transcribe_sources(
-            [audio_path], progress_callback=progress_callback
+            [audio_path],
+            progress_callback=progress_callback,
+            phase_callback=phase_callback,
         )
         _, _, segments, duration = transcribed[0]
         for segment in segments:

@@ -67,7 +67,7 @@ class _FakeTranscriber:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def transcribe_sources(self, audio_paths, progress_callback=None):
+    def transcribe_sources(self, audio_paths, progress_callback=None, phase_callback=None):
         self.calls.extend(audio_paths)
         return [
             (f"source_{i}", path, [_segment()], 30.0)
