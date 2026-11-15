@@ -125,13 +125,13 @@ class SenseVoiceTranscriber:
         progress_callback: ProgressCallback | None = None,
         phase_callback: PhaseCallback | None = None,
     ) -> tuple[list[RawSegment], float]:
+        if phase_callback is not None:
+            phase_callback(audio_path, "読み込み・リサンプリング")
         prepared_path = prepare_audio(
             audio_path,
             cache_dir=Path(self._audio_cache_dir) if self._audio_cache_dir else None,
             soundfile_module=self._soundfile,
         )
-        if phase_callback is not None:
-            phase_callback(audio_path, "読み込み・リサンプリング")
         audio, sample_rate = self._soundfile.read(
             prepared_path, dtype="float32", always_2d=True
         )

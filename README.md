@@ -53,7 +53,7 @@ uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --srt-outpu
 処理は次の順で進みます。
 
 1. 選択した文字起こし backend で日本語音声を単語タイムスタンプ付きで認識
-2. 句読点、文字数、表示時間を基準に字幕を分割
+2. 句読点、文字数、表示時間を基準に字幕を分割（境界は文節の先頭にのみ置き、単語や文節の途中では切らない。フィラーは独立した字幕・スライスとして切り出す）
 3. 0.4秒超の無音、フィラー、`no_speech_prob > 0.8`をカット候補として判定
 4. DaVinci Resolve向けのOTIOとSRTを出力
 

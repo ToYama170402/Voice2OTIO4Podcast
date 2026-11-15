@@ -1,32 +1,12 @@
 """Command-line interface for PodcastPreprocessor."""
 
 import argparse
-import os
 import sys
-from typing import TextIO
 
 from .models import AudioSource, seconds_to_frame
 from .pipeline import process_sources
 from .factory import build_transcriber
-
-
-class _ProgressDisplay:
-    def __init__(self, stream: TextIO) -> None:
-        self._stream = stream
-        self._enabled = stream.isatty()
-
-    def __call__(self, audio_path: str, elapsed: float, duration: float | None) -> None:
-        if not self._enabled or duration is None or duration <= 0:
-            return
-        ratio = min(max(elapsed / duration, 0.0), 1.0)
-        width = 30
-        filled = int(width * ratio)
-        bar = "#" * filled + "-" * (width - filled)
-        name = os.path.basename(audio_path)
-        self._stream.write(f"\rTranscribing {name}: [{bar}] {ratio:>6.1%}")
-        if ratio >= 1.0:
-            self._stream.write("\n")
-        self._stream.flush()
+from .progress import ProgressReporter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -158,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        progress = _ProgressDisplay(sys.stderr)
+        progress = ProgressReporter(sys.stderr, total_files=len(args.audio))
         transcribed = build_transcriber(
             args.backend,
             args.model,
@@ -184,7 +164,9 @@ def main(argv: list[str] | None = None) -> int:
             args.sensevoice_vad_min_speech_s,
             args.sensevoice_vad_max_speech_s,
             sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
-        ).transcribe_sources(args.audio, progress_callback=progress)
+        ).transcribe_sources(
+            args.audio, progress_callback=progress, phase_callback=progress.phase
+        )
     except RuntimeError as error:
         parser.error(str(error))
     sources: list[tuple[AudioSource, list]] = []
@@ -205,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
         )
     try:
+        progress.start_processing()
         process_sources(
             sources,
             args.output,
@@ -214,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))
+    progress.finish()
     return 0
 
 
