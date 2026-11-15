@@ -56,3 +56,43 @@ def test_process_sources_writes_one_three_layer_group_per_source(tmp_path) -> No
         "Bです。\n"
         "\n"
     )
+
+
+def test_process_sources_marks_acoustic_filler_candidates_on_audio_clips(
+    tmp_path,
+) -> None:
+    from podcastpreprocessor.filler_detector import FillerRegion
+
+    source = AudioSource("source_1", "C:/audio/a.wav", 1, 90)
+    raw = [
+        RawSegment(
+            1,
+            0.0,
+            3.0,
+            "今日は収録です",
+            0.0,
+            [WordTimestamp("今日は収録です", 0.0, 3.0, 1.0)],
+            source_id="source_1",
+        )
+    ]
+    output_path = tmp_path / "timeline.otio"
+
+    processed = process_sources(
+        [(source, raw)],
+        str(output_path),
+        filler_regions={"source_1": [FillerRegion(1.0, 1.6)]},
+    )
+
+    assert len(processed[0].clip_markers) == 1
+    marker = processed[0].clip_markers[0]
+    assert marker.name == "フィラー候補"
+    assert (marker.start_frame, marker.end_frame) == (30, 48)
+
+    timeline = otio.adapters.read_from_file(str(output_path))
+    audio_track = next(t for t in timeline.tracks if t.kind == "Audio")
+    clip = next(item for item in audio_track if hasattr(item, "markers"))
+    assert len(clip.markers) == 1
+    assert clip.markers[0].name == "フィラー候補"
+    marked = clip.markers[0].marked_range
+    assert marked.start_time.value == 30
+    assert marked.duration.value == 18

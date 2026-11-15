@@ -194,29 +194,46 @@ def generate_otio(
         for audio_slice in build_audio_slices(
             segment_list, source.source_id, source.duration_frames
         ):
-            link_group_id = next(
+            segment = next(
                 (
-                    segment.link_group_id
-                    for segment in source_segments
-                    if segment.segment_id == audio_slice.segment_id
+                    item
+                    for item in source_segments
+                    if item.segment_id == audio_slice.segment_id
                 ),
-                0,
+                None,
             )
-            audio_track.append(
-                _clip(
-                    source.name or source.source_id,
-                    audio_slice.source_in_frame,
-                    audio_slice.source_out_frame,
-                    fps,
-                    link_group_id,
-                    reference,
-                    (
-                        _metadata(link_group_id)
-                        if link_group_id
-                        else {"source_slice": True}
-                    ),
-                )
+            link_group_id = segment.link_group_id if segment else 0
+            clip = _clip(
+                source.name or source.source_id,
+                audio_slice.source_in_frame,
+                audio_slice.source_out_frame,
+                fps,
+                link_group_id,
+                reference,
+                (
+                    _metadata(link_group_id)
+                    if link_group_id
+                    else {"source_slice": True}
+                ),
             )
+            if segment is not None:
+                for marker in segment.clip_markers:
+                    clip.markers.append(
+                        otio.schema.Marker(
+                            name=marker.name,
+                            color="YELLOW",
+                            marked_range=otio.opentime.TimeRange(
+                                start_time=otio.opentime.RationalTime(
+                                    audio_slice.source_in_frame + marker.start_frame,
+                                    fps,
+                                ),
+                                duration=otio.opentime.RationalTime(
+                                    marker.end_frame - marker.start_frame, fps
+                                ),
+                            ),
+                        )
+                    )
+            audio_track.append(clip)
         timeline.tracks.append(marker_track)
         timeline.tracks.append(subtitle_track)
         timeline.tracks.append(audio_track)

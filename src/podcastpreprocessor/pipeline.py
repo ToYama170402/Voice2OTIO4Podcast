@@ -1,11 +1,13 @@
 """End-to-end orchestration for transcription and timeline generation."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from .evaluator import evaluate_segment
+from .filler_detector import FillerRegion
 from .models import (
     AudioSource,
+    ClipMarker,
     ProcessedSegment,
     RawSegment,
     seconds_to_frame,
@@ -14,6 +16,34 @@ from .models import (
 from .otio import write_otio
 from .segmentator import segment_source
 from .srt import write_srt
+
+_FILLER_MARKER_NAME = "フィラー候補"
+_MIN_MARKER_SECONDS = 0.08
+
+
+def _clip_markers(
+    regions: Sequence[FillerRegion],
+    start_frame: int,
+    end_frame: int,
+    fps: int,
+) -> list[ClipMarker]:
+    """Clip-relative markers for filler candidates overlapping a segment."""
+    markers: list[ClipMarker] = []
+    segment_start = start_frame / fps
+    segment_end = end_frame / fps
+    for region in regions:
+        overlap_start = max(region.start, segment_start)
+        overlap_end = min(region.end, segment_end)
+        if overlap_end - overlap_start < _MIN_MARKER_SECONDS:
+            continue
+        markers.append(
+            ClipMarker(
+                name=_FILLER_MARKER_NAME,
+                start_frame=seconds_to_frame(overlap_start, fps) - start_frame,
+                end_frame=seconds_to_frame(overlap_end, fps) - start_frame,
+            )
+        )
+    return markers
 
 
 def process_segments(
@@ -45,11 +75,13 @@ def process_sources(
     fps: int = 30,
     sequence_name: str = "Podcast_Timeline",
     srt_output_path: str | None = None,
+    filler_regions: Mapping[str, Sequence[FillerRegion]] | None = None,
 ) -> list[ProcessedSegment]:
     """Process multiple one-file-per-speaker sources into one OTIO timeline."""
     processed: list[ProcessedSegment] = []
     source_list = list(sources)
     for source, raw_segments in source_list:
+        regions = (filler_regions or {}).get(source.source_id, ())
         previous_end: float | None = None
         for refined in segment_source(
             list(raw_segments), track_index=source.track_index
@@ -80,6 +112,7 @@ def process_sources(
                     color_label="Red" if evaluation.is_cut_candidate else "None",
                     source_id=source.source_id,
                     audio_path=source.path,
+                    clip_markers=_clip_markers(regions, start_frame, end_frame, fps),
                 )
             )
             previous_end = refined.end

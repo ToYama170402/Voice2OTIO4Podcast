@@ -99,6 +99,19 @@ class RefinedSegment:
             raise ValueError("track_index must be positive")
 
 
+@dataclass(frozen=True)
+class ClipMarker:
+    """A marker attached to an audio clip, in frames relative to its start."""
+
+    name: str
+    start_frame: int
+    end_frame: int
+
+    def __post_init__(self) -> None:
+        if self.start_frame < 0 or self.end_frame <= self.start_frame:
+            raise ValueError("clip marker must satisfy 0 <= start < end")
+
+
 @dataclass
 class ProcessedSegment:
     segment_id: str
@@ -115,6 +128,7 @@ class ProcessedSegment:
     source_id: str = "source_1"
     audio_path: str = ""
     link_group_id: int = 0
+    clip_markers: list[ClipMarker] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.track_index <= 0:
