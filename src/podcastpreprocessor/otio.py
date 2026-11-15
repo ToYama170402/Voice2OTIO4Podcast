@@ -243,19 +243,6 @@ def generate_otio(
                             marked_range=marked_range,
                         )
                     )
-                    # Also mirror the marker onto the timeline itself.
-                    # Audio slices tile the timeline continuously from
-                    # frame 0, so the source-frame position is also the
-                    # timeline position. Some Resolve versions do not
-                    # surface clip markers from OTIO imports, while
-                    # timeline (stack) markers are imported reliably.
-                    timeline.tracks.markers.append(
-                        otio.schema.Marker(
-                            name=marker.name,
-                            color="YELLOW",
-                            marked_range=marked_range,
-                        )
-                    )
             audio_track.append(clip)
         timeline.tracks.append(marker_track)
         timeline.tracks.append(subtitle_track)

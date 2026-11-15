@@ -98,8 +98,12 @@ def test_process_sources_marks_acoustic_filler_candidates_on_audio_clips(
     assert marked.duration.value == 18
 
 
-def test_process_sources_mirrors_filler_markers_onto_timeline(tmp_path) -> None:
-    """Timeline (stack) markers are the form Resolve reliably imports."""
+def test_process_sources_keeps_filler_markers_on_clips_only(tmp_path) -> None:
+    """Filler markers live on the audio clips, not on the timeline.
+
+    Clip markers follow their clip through ripple edits; timeline
+    markers were mirrored only as a workaround and are not emitted.
+    """
     from podcastpreprocessor.filler_detector import FillerRegion
 
     source = AudioSource("source_1", "C:/audio/a.wav", 1, 90)
@@ -123,9 +127,15 @@ def test_process_sources_mirrors_filler_markers_onto_timeline(tmp_path) -> None:
     )
 
     timeline = otio.adapters.read_from_file(str(output_path))
-    stack_markers = list(timeline.tracks.markers)
-    assert len(stack_markers) == 1
-    assert stack_markers[0].name == "フィラー候補"
-    assert stack_markers[0].color == "YELLOW"
-    assert stack_markers[0].marked_range.start_time.value == 30
-    assert stack_markers[0].marked_range.duration.value == 18
+    assert list(timeline.tracks.markers) == []
+    audio_track = next(
+        track for track in timeline.tracks if track.kind == otio.schema.TrackKind.Audio
+    )
+    clip_markers = [
+        marker for clip in audio_track if isinstance(clip, otio.schema.Clip)
+        for marker in clip.markers
+    ]
+    assert len(clip_markers) == 1
+    assert clip_markers[0].name == "フィラー候補"
+    assert clip_markers[0].marked_range.start_time.value == 30
+    assert clip_markers[0].marked_range.duration.value == 18
