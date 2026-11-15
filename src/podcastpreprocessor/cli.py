@@ -1,6 +1,8 @@
 """Command-line interface for PodcastPreprocessor."""
 
 import argparse
+import os
+from pathlib import Path
 import sys
 
 from .models import AudioSource, seconds_to_frame
@@ -8,24 +10,7 @@ from .pipeline import process_sources
 from .factory import build_transcriber
 from .filler_detector import detect_filler_candidates
 from .progress import ProgressReporter
-
-class _ProgressDisplay:
-    def __init__(self, stream: TextIO) -> None:
-        self._stream = stream
-        self._enabled = stream.isatty()
-
-    def __call__(self, audio_path: str, elapsed: float, duration: float | None) -> None:
-        if not self._enabled or duration is None or duration <= 0:
-            return
-        ratio = min(max(elapsed / duration, 0.0), 1.0)
-        width = 30
-        filled = int(width * ratio)
-        bar = "#" * filled + "-" * (width - filled)
-        name = os.path.basename(audio_path)
-        self._stream.write(f"\rTranscribing {name}: [{bar}] {ratio:>6.1%}")
-        if ratio >= 1.0:
-            self._stream.write("\n")
-        self._stream.flush()
+from .transcript_cache import default_cache_dir, transcribe_sources_cached
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -156,6 +141,16 @@ def build_parser() -> argparse.ArgumentParser:
         "on the audio clips (works even when the transcription backend "
         "drops fillers, e.g. SenseVoice)",
     )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="transcript cache directory (default: ~/.cache/podcastpreprocessor/transcripts)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="do not reuse or store cached transcripts",
+    )
     return parser
 
 
@@ -164,33 +159,78 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         progress = ProgressReporter(sys.stderr, total_files=len(args.audio))
-        transcribed = build_transcriber(
-            args.backend,
-            args.model,
-            args.device,
-            args.compute_type,
-            args.sensevoice_model,
-            args.language,
-            args.use_itn,
-            args.batch_size_s,
-            args.sensevoice_quantization,
-            args.sensevoice_model,
-            args.sensevoice_cache_dir,
-            args.offline,
-            args.sensevoice_provider,
-            args.sensevoice_num_threads,
-            args.sensevoice_chunk_duration_s,
-            args.sensevoice_vad,
-            args.sensevoice_vad_threshold_db,
-            args.sensevoice_vad_padding_s,
-            args.sensevoice_vad_model,
-            args.sensevoice_vad_threshold,
-            args.sensevoice_vad_min_silence_s,
-            args.sensevoice_vad_min_speech_s,
-            args.sensevoice_vad_max_speech_s,
-            sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
-        ).transcribe_sources(
-            args.audio, progress_callback=progress, phase_callback=progress.phase
+        settings = {
+            "backend": args.backend,
+            "model": args.model,
+            "device": args.device,
+            "compute_type": args.compute_type,
+            "language": args.language,
+            "use_itn": args.use_itn,
+            "batch_size_s": args.batch_size_s,
+            "sensevoice_model": args.sensevoice_model,
+            "sensevoice_quantization": args.sensevoice_quantization,
+            "sensevoice_provider": args.sensevoice_provider,
+            "sensevoice_num_threads": args.sensevoice_num_threads,
+            "sensevoice_chunk_duration_s": args.sensevoice_chunk_duration_s,
+            "sensevoice_vad": args.sensevoice_vad,
+            "sensevoice_vad_threshold_db": args.sensevoice_vad_threshold_db,
+            "sensevoice_vad_padding_s": args.sensevoice_vad_padding_s,
+            "sensevoice_vad_model": args.sensevoice_vad_model,
+            "sensevoice_vad_threshold": args.sensevoice_vad_threshold,
+            "sensevoice_vad_min_silence_s": args.sensevoice_vad_min_silence_s,
+            "sensevoice_vad_min_speech_s": args.sensevoice_vad_min_speech_s,
+            "sensevoice_vad_max_speech_s": args.sensevoice_vad_max_speech_s,
+        }
+        cache_dir = None
+        if not args.no_cache:
+            cache_dir = (
+                Path(args.cache_dir) if args.cache_dir else default_cache_dir()
+            )
+
+        def _build() -> object:
+            return build_transcriber(
+                args.backend,
+                args.model,
+                args.device,
+                args.compute_type,
+                args.sensevoice_model,
+                args.language,
+                args.use_itn,
+                args.batch_size_s,
+                args.sensevoice_quantization,
+                args.sensevoice_model,
+                args.sensevoice_cache_dir,
+                args.offline,
+                args.sensevoice_provider,
+                args.sensevoice_num_threads,
+                args.sensevoice_chunk_duration_s,
+                args.sensevoice_vad,
+                args.sensevoice_vad_threshold_db,
+                args.sensevoice_vad_padding_s,
+                args.sensevoice_vad_model,
+                args.sensevoice_vad_threshold,
+                args.sensevoice_vad_min_silence_s,
+                args.sensevoice_vad_min_speech_s,
+                args.sensevoice_vad_max_speech_s,
+                sensevoice_audio_cache_dir=args.sensevoice_audio_cache_dir,
+                sensevoice_transcript_cache_dir=(
+                    str(cache_dir) if cache_dir is not None else None
+                ),
+            )
+
+        def _on_cache_hit(audio_path: str) -> None:
+            sys.stderr.write(
+                f"Using cached transcript: {os.path.basename(audio_path)}\n"
+            )
+
+        transcribed = transcribe_sources_cached(
+            _build,
+            args.audio,
+            settings,
+            cache_dir,
+            progress_callback=progress,
+            phase_callback=progress.phase,
+            on_cache_hit=_on_cache_hit,
         )
     except RuntimeError as error:
         parser.error(str(error))
