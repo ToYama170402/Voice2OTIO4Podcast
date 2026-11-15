@@ -53,7 +53,7 @@ uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --srt-outpu
 処理は次の順で進みます。
 
 1. 選択した文字起こし backend で日本語音声を単語タイムスタンプ付きで認識
-2. 句読点、文字数、表示時間を基準に字幕を分割（境界は文節の先頭にのみ置き、単語や文節の途中では切らない。フィラーは独立した字幕・スライスとして切り出す）
+2. 句読点、文字数、表示時間を基準に字幕を分割
 3. 0.4秒超の無音、フィラー、`no_speech_prob > 0.8`をカット候補として判定
 4. DaVinci Resolve向けのOTIOとSRTを出力
 
@@ -78,4 +78,4 @@ Whisperモデルなしの固定データ検証は `process_segments` または `
 
 ## 音声の前処理（変換・リサンプリング）
 
-SenseVoiceバックエンドでは、入力音声は文字起こしの前に16kHzモノラルWAVへ変換されます。変換はPyAV（libswresample）によるストリーミング処理で、変換結果はキャッシュされるため再実行時は省略されます（既定: `~/.cache/podcastpreprocessor/converted/`、`--sensevoice-audio-cache-dir` で変更可）。これにより、m4aなどsoundfileが直接読めない形式も扱えます。
+SenseVoiceバックエンドでは、入力音声は文字起こしの前に16kHzモノラルWAVへ変換されます。変換はPyAV（libswresample）によるストリーミング処理で、変換結果はキャッシュされるため再実行時は省略されます。変換の途中経過も30秒単位でジャーナルに保存されるため、長時間の変換が途中で止まっても、再実行時は続きから再開されます（既定: `~/.cache/podcastpreprocessor/converted/`、`--sensevoice-audio-cache-dir` で変更可）。これにより、m4aなどsoundfileが直接読めない形式も扱えます。

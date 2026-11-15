@@ -72,3 +72,56 @@ def test_prepare_converts_m4a(tmp_path: Path) -> None:
     assert info.samplerate == 16000
     assert info.channels == 1
     assert abs(info.duration - 1.2) < 0.2
+
+
+def test_prepare_resumes_interrupted_conversion(tmp_path: Path) -> None:
+    import json
+
+    from podcastpreprocessor.audio_io import _file_key, _partial_paths
+
+    source = tmp_path / "input.wav"
+    _write_wav(source, SR, channels=2, seconds=3.0)
+    reference = prepare_audio(str(source), cache_dir=tmp_path / "full")
+    ref_samples, _ = sf.read(reference, dtype="float32")
+
+    cache = tmp_path / "resumed"
+    cache.mkdir()
+    dest = cache / f"{_file_key(str(source))}.wav"
+    partial, journal = _partial_paths(dest)
+    ref_int16, _ = sf.read(reference, dtype="int16")
+    partial.write_bytes(ref_int16[:16000].tobytes())
+    journal.write_text(json.dumps({"version": 1, "samples": 16000}))
+
+    prepared = prepare_audio(str(source), cache_dir=cache)
+
+    assert prepared == str(dest)
+    samples, _ = sf.read(prepared, dtype="float32")
+    assert abs(len(samples) - len(ref_samples)) < 800  # within 50 ms
+    # The tone is continuous across the resume seam and to the end.
+    for start_s in (0.95, 2.5):
+        window = samples[int(start_s * 16000) : int((start_s + 0.1) * 16000)]
+        assert float(np.sqrt(np.mean(window**2))) > 0.1
+    # Partials are cleaned up after a successful conversion.
+    assert not partial.exists()
+    assert not journal.exists()
+
+
+def test_prepare_restarts_when_partial_is_inconsistent(tmp_path: Path) -> None:
+    import json
+
+    from podcastpreprocessor.audio_io import _file_key, _partial_paths
+
+    source = tmp_path / "input.wav"
+    _write_wav(source, SR, channels=2, seconds=1.2)
+    cache = tmp_path / "converted"
+    cache.mkdir()
+    dest = cache / f"{_file_key(str(source))}.wav"
+    partial, journal = _partial_paths(dest)
+    partial.write_bytes(b"\x00" * 100)  # far less than the journal claims
+    journal.write_text(json.dumps({"version": 1, "samples": 16000}))
+
+    prepared = prepare_audio(str(source), cache_dir=cache)
+
+    info = sf.info(prepared)
+    assert info.samplerate == 16000
+    assert abs(info.duration - 1.2) < 0.05
