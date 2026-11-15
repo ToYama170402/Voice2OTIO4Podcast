@@ -2,10 +2,12 @@
 
 from importlib import import_module
 import math
+from pathlib import Path
 import re
 from types import SimpleNamespace
 from typing import Any
 
+from .audio_io import prepare_audio
 from .model_manager import SenseVoiceModelManager
 from .models import RawSegment, WordTimestamp
 from .transcriber import PhaseCallback, ProgressCallback, TranscriptionResult
@@ -34,6 +36,7 @@ class SenseVoiceTranscriber:
         vad_min_silence_duration: float = 0.25,
         vad_min_speech_duration: float = 0.1,
         vad_max_speech_duration: float = 120.0,
+        audio_cache_dir: str | None = None,
     ) -> None:
         if num_threads <= 0:
             raise ValueError("num_threads must be positive")
@@ -93,6 +96,7 @@ class SenseVoiceTranscriber:
         self._vad_min_silence_duration = vad_min_silence_duration
         self._vad_min_speech_duration = vad_min_speech_duration
         self._vad_max_speech_duration = vad_max_speech_duration
+        self._audio_cache_dir = audio_cache_dir
 
     def transcribe(
         self, audio_path: str, source_id: str = "source_1"
@@ -123,8 +127,13 @@ class SenseVoiceTranscriber:
     ) -> tuple[list[RawSegment], float]:
         if phase_callback is not None:
             phase_callback(audio_path, "読み込み・リサンプリング")
+        prepared_path = prepare_audio(
+            audio_path,
+            cache_dir=Path(self._audio_cache_dir) if self._audio_cache_dir else None,
+            soundfile_module=self._soundfile,
+        )
         audio, sample_rate = self._soundfile.read(
-            audio_path, dtype="float32", always_2d=True
+            prepared_path, dtype="float32", always_2d=True
         )
         if len(audio) == 0 or sample_rate <= 0:
             raise RuntimeError(f"audio contains no samples: {audio_path}")

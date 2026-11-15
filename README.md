@@ -75,3 +75,7 @@ Whisperモデルなしの固定データ検証は `process_segments` または `
 - 異なるサンプルレートやチャンネル数の音声をミックス・変換する処理は行いません。
 - 文字起こし backend は `RawSegment` と単語タイムスタンプを返す必要があります。単語タイムスタンプを返せない SenseVoice 推論経路は利用できません。
 - SenseVoiceSmall の依存は `uv sync --extra sensevoice` で追加します。モデルは sherpa-onnx の公式 release から取得し、SHA256 を検証します。モデルのライセンスと取得条件は配布元を確認してください。
+
+## 音声の前処理（変換・リサンプリング）
+
+SenseVoiceバックエンドでは、入力音声は文字起こしの前に16kHzモノラルWAVへ変換されます。変換はPyAV（libswresample）によるストリーミング処理で、変換結果はキャッシュされるため再実行時は省略されます。変換の途中経過も30秒単位でジャーナルに保存されるため、長時間の変換が途中で止まっても、再実行時は続きから再開されます（既定: `~/.cache/podcastpreprocessor/converted/`、`--sensevoice-audio-cache-dir` で変更可）。これにより、m4aなどsoundfileが直接読めない形式も扱えます。
