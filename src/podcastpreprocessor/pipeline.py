@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from .evaluator import evaluate_segment
+from .evaluator import Evaluation, detect_restarts, evaluate_segment
 from .filler_detector import FillerRegion, token_filler_regions
 from .models import (
     AudioSource,
@@ -98,8 +98,10 @@ def process_sources(
                     for other in regions
                 )
             ]
+        refined_list = list(segment_source(raw_list, track_index=source.track_index))
+        restart_reasons = detect_restarts(refined_list)
         previous_end: float | None = None
-        for refined in segment_source(raw_list, track_index=source.track_index):
+        for refined in refined_list:
             frame_range = seconds_to_frame_range(
                 refined.start,
                 refined.end,
@@ -111,6 +113,11 @@ def process_sources(
                 continue
             start_frame, end_frame = frame_range
             evaluation = evaluate_segment(refined, previous_end=previous_end)
+            restart_reason = restart_reasons.get(refined.segment_id)
+            if restart_reason is not None:
+                evaluation = Evaluation(
+                    True, (*evaluation.reasons, restart_reason)
+                )
             processed.append(
                 ProcessedSegment(
                     segment_id=refined.segment_id,
