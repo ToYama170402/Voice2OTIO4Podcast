@@ -48,3 +48,52 @@ def test_rejects_unvoiced_noise_island() -> None:
     samples = np.concatenate([_silence(1.0), noise, _silence(1.0)])
 
     assert detect_candidates(samples, SR) == []
+
+
+def _segment(text: str, chars: list[tuple[str, float, float]]):
+    from podcastpreprocessor.models import RawSegment, WordTimestamp
+
+    return RawSegment(
+        1,
+        chars[0][1],
+        chars[-1][2],
+        text,
+        0.0,
+        [WordTimestamp(c, s, e, 1.0) for c, s, e in chars],
+    )
+
+
+def test_token_filler_regions_finds_standalone_filler() -> None:
+    from podcastpreprocessor.filler_detector import token_filler_regions
+
+    segment = _segment(
+        "あ今日は晴れ",
+        [
+            ("あ", 0.0, 0.3),
+            ("今", 0.3, 0.45),
+            ("日", 0.45, 0.6),
+            ("は", 0.6, 0.75),
+            ("晴", 0.75, 0.95),
+            ("れ", 0.95, 1.1),
+        ],
+    )
+    regions = token_filler_regions([segment])
+    assert len(regions) == 1
+    assert (regions[0].start, regions[0].end) == (0.0, 0.3)
+
+
+def test_token_filler_regions_ignores_nasal_inside_word() -> None:
+    from podcastpreprocessor.filler_detector import token_filler_regions
+
+    segment = _segment(
+        "そんな日",
+        [("そ", 0.0, 0.15), ("ん", 0.15, 0.3), ("な", 0.3, 0.45), ("日", 0.45, 0.6)],
+    )
+    assert token_filler_regions([segment]) == []
+
+
+def test_token_filler_regions_skips_segments_without_words() -> None:
+    from podcastpreprocessor.filler_detector import token_filler_regions
+    from podcastpreprocessor.models import RawSegment
+
+    assert token_filler_regions([RawSegment(1, 0.0, 1.0, "あ", 0.0, [])]) == []

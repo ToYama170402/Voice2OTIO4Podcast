@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from .evaluator import evaluate_segment
-from .filler_detector import FillerRegion
+from .filler_detector import FillerRegion, token_filler_regions
 from .models import (
     AudioSource,
     ClipMarker,
@@ -81,11 +81,25 @@ def process_sources(
     processed: list[ProcessedSegment] = []
     source_list = list(sources)
     for source, raw_segments in source_list:
+        raw_list = list(raw_segments)
         regions = (filler_regions or {}).get(source.source_id, ())
+        if filler_regions is not None:
+            # Enrich the acoustic candidates with the token-level scan
+            # (Sudachi filler words in the word timestamps). Token
+            # regions that overlap an acoustic candidate are dropped so
+            # a single utterance does not produce two markers.
+            token_regions = token_filler_regions(raw_list)
+            regions = list(regions) + [
+                region
+                for region in token_regions
+                if not any(
+                    min(region.end, other.end) - max(region.start, other.start)
+                    > 0.05
+                    for other in regions
+                )
+            ]
         previous_end: float | None = None
-        for refined in segment_source(
-            list(raw_segments), track_index=source.track_index
-        ):
+        for refined in segment_source(raw_list, track_index=source.track_index):
             frame_range = seconds_to_frame_range(
                 refined.start,
                 refined.end,

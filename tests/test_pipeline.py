@@ -139,3 +139,33 @@ def test_process_sources_keeps_filler_markers_on_clips_only(tmp_path) -> None:
     assert clip_markers[0].name == "フィラー候補"
     assert clip_markers[0].marked_range.start_time.value == 30
     assert clip_markers[0].marked_range.duration.value == 18
+
+
+def test_process_sources_marks_token_scan_fillers_when_enabled(tmp_path) -> None:
+    """With filler marking on, Sudachi filler words in the token stream
+    become clip markers even without acoustic candidates."""
+    source = AudioSource("source_1", "C:/audio/a.wav", 1, 90)
+    raw = [
+        RawSegment(
+            1,
+            0.0,
+            3.0,
+            "あ今日は収録です",
+            0.0,
+            [
+                WordTimestamp("あ", 0.0, 0.6, 1.0),
+                WordTimestamp("今日は収録です", 0.6, 3.0, 1.0),
+            ],
+            source_id="source_1",
+        )
+    ]
+    output_path = tmp_path / "timeline.otio"
+
+    processed = process_sources(
+        [(source, raw)],
+        str(output_path),
+        filler_regions={},
+    )
+
+    markers = [m for segment in processed for m in segment.clip_markers]
+    assert any(m.name == "フィラー候補" for m in markers)
