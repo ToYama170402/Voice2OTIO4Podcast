@@ -91,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
         help="計算型（default / int8 / float16 など。CPUでは int8 が軽量です。既定: default）",
     )
+    whisper.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="CPU推論のスレッド数（0 = 自動、既定: 0）",
+    )
 
     sensevoice = parser.add_argument_group("SenseVoice のオプション")
     sensevoice.add_argument(
@@ -274,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
                 sensevoice_transcript_cache_dir=(
                     str(cache_dir) if cache_dir is not None else None
                 ),
+                cpu_threads=args.cpu_threads,
             )
 
         def _on_cache_hit(audio_path: str) -> None:

@@ -85,6 +85,7 @@ SenseVoiceバックエンドでは、入力音声は推論前に16kHzモノラ�
 | `--model` | `small` | Whisperモデルサイズ（`tiny` / `base` / `small` / `medium` / `large-v3` / `turbo` など） |
 | `--device` | `auto` | 推論デバイス（`auto` / `cpu` / `cuda`） |
 | `--compute-type` | `default` | 計算型（`default` / `int8` / `float16` など。CPUでは `int8` が軽量） |
+| `--cpu-threads` | `0` | CPU推論のスレッド数（`0` = 自動） |
 
 ### SenseVoice
 
