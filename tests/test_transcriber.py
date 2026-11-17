@@ -6,6 +6,28 @@ import pytest
 from podcastpreprocessor.transcriber import FasterWhisperTranscriber
 
 
+def test_cpu_threads_reach_whisper_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    faster_whisper = ModuleType("faster_whisper")
+    captured: dict[str, object] = {}
+
+    class FakeWhisperModel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    faster_whisper.WhisperModel = FakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", faster_whisper)
+
+    FasterWhisperTranscriber("base", "cpu", "int8", cpu_threads=6)
+
+    assert captured["args"] == ("base",)
+    assert captured["kwargs"] == {
+        "device": "cpu",
+        "compute_type": "int8",
+        "cpu_threads": 6,
+    }
+
+
 def test_transcribe_sources_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     faster_whisper = ModuleType("faster_whisper")
 

@@ -29,7 +29,10 @@ class FasterWhisperTranscriber:
         model_size: str = "small",
         device: str = "auto",
         compute_type: str = "default",
+        cpu_threads: int = 0,
     ) -> None:
+        if cpu_threads < 0:
+            raise ValueError("cpu_threads must be >= 0")
         try:
             from faster_whisper import WhisperModel
         except ImportError as error:
@@ -41,6 +44,7 @@ class FasterWhisperTranscriber:
                 model_size,
                 device=device,
                 compute_type=compute_type,
+                cpu_threads=cpu_threads,
             )
         except (MemoryError, RuntimeError) as error:
             if _is_memory_error(error):

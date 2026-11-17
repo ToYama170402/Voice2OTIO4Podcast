@@ -30,9 +30,10 @@ def build_transcriber(
     sensevoice_vad_max_speech_s: float = 120.0,
     sensevoice_audio_cache_dir: str | None = None,
     sensevoice_transcript_cache_dir: str | None = None,
+    cpu_threads: int = 0,
 ) -> Transcriber:
     if backend == "faster-whisper":
-        return FasterWhisperTranscriber(model, device, compute_type)
+        return FasterWhisperTranscriber(model, device, compute_type, cpu_threads)
     if backend == "sensevoice":
         return SenseVoiceTranscriber(
             quantization=sensevoice_quantization,

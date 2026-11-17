@@ -16,7 +16,31 @@ def test_build_transcriber_keeps_whisper_as_default_backend(
     )
 
     assert isinstance(transcriber, FakeWhisperTranscriber)
-    assert transcriber.args == ("small", "cpu", "int8")
+    assert transcriber.args == ("small", "cpu", "int8", 0)
+
+
+def test_build_transcriber_passes_cpu_threads_to_whisper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWhisperTranscriber:
+        def __init__(self, *args: object) -> None:
+            self.args = args
+
+    monkeypatch.setattr(factory, "FasterWhisperTranscriber", FakeWhisperTranscriber)
+    transcriber = factory.build_transcriber(
+        "faster-whisper",
+        "small",
+        "cpu",
+        "int8",
+        "ignored",
+        "ja",
+        True,
+        60,
+        cpu_threads=8,
+    )
+
+    assert isinstance(transcriber, FakeWhisperTranscriber)
+    assert transcriber.args == ("small", "cpu", "int8", 8)
 
 
 def test_build_transcriber_rejects_unknown_backend() -> None:
