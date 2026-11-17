@@ -12,144 +12,202 @@ from .filler_detector import detect_filler_candidates
 from .progress import ProgressReporter
 from .transcript_cache import default_cache_dir, transcribe_sources_cached
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate OpenTimelineIO from Japanese audio"
+        prog="podcast-preprocessor",
+        description=(
+            "日本語ポッドキャストの音声を文字起こしし、字幕・カット候補・"
+            "元音声をリンクしたOpenTimelineIO（.otio）を生成します。"
+            "生成したOTIOはDaVinci Resolveに読み込んで編集できます。"
+        ),
+        epilog=(
+            "使用例:\n"
+            "  最小の実行（faster-whisper、話者1人）:\n"
+            "    podcast-preprocessor speaker_a.wav podcast.otio\n"
+            "\n"
+            "  話者2人、CPU向けの設定:\n"
+            "    podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio"
+            " --model small --device cpu --compute-type int8\n"
+            "\n"
+            "  SenseVoiceを使う:\n"
+            "    podcast-preprocessor speaker_a.wav podcast.otio"
+            " --backend sensevoice\n"
+            "\n"
+            "  SenseVoice + VAD（無音区間を推論から除外）:\n"
+            "    podcast-preprocessor speaker_a.wav podcast.otio"
+            " --backend sensevoice --sensevoice-vad\n"
+            "\n"
+            "出力OTIOと同じ場所に、字幕ファイル（.srt）も生成されます。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("audio", nargs="+", help="input audio file(s), one per speaker")
-    parser.add_argument("output", help="output OTIO file")
     parser.add_argument(
+        "audio",
+        nargs="+",
+        help="入力音声ファイル（話者ごとに1ファイル。指定順に source_1, source_2, ... になります）",
+    )
+    parser.add_argument("output", help="出力するOTIOファイルのパス")
+
+    common = parser.add_argument_group("共通のオプション")
+    common.add_argument(
         "--backend",
         choices=("faster-whisper", "sensevoice"),
         default="faster-whisper",
-        help="transcription backend",
+        help="文字起こしのバックエンド（既定: faster-whisper）",
     )
-    parser.add_argument(
+    common.add_argument(
         "--srt-output",
-        help="output SRT file (default: same path as output with .srt suffix)",
+        help="字幕SRTの出力先（既定: 出力OTIOと同じ場所・同じ名前で拡張子を .srt にしたもの）",
     )
-    parser.add_argument("--model", default="small", help="faster-whisper model size")
-    parser.add_argument(
+    common.add_argument(
+        "--fps", type=int, default=30, help="タイムラインのフレームレート（既定: 30）"
+    )
+    common.add_argument(
+        "--sequence-name",
+        default="Podcast_Timeline",
+        help="OTIO内のシーケンス名（既定: Podcast_Timeline）",
+    )
+    common.add_argument(
+        "--acoustic-fillers",
+        action="store_true",
+        help="音声信号からもフィラー候補を検出し、音声クリップに黄色マーカーで付ける"
+        "（SenseVoiceのようにフィラーを文字起こしへ残さないバックエンドでも候補を拾えます）",
+    )
+
+    whisper = parser.add_argument_group("faster-whisper のオプション")
+    whisper.add_argument(
+        "--model",
+        default="small",
+        help="Whisperモデルサイズ（tiny / base / small / medium / large-v3 / turbo など。既定: small）",
+    )
+    whisper.add_argument(
+        "--device",
+        default="auto",
+        help="推論デバイス（auto / cpu / cuda。既定: auto）",
+    )
+    whisper.add_argument(
+        "--compute-type",
+        default="default",
+        help="計算型（default / int8 / float16 など。CPUでは int8 が軽量です。既定: default）",
+    )
+
+    sensevoice = parser.add_argument_group("SenseVoice のオプション")
+    sensevoice.add_argument(
         "--sensevoice-model",
         default=None,
-        help="local SenseVoice model directory (default: download to cache)",
+        help="ローカルのSenseVoiceモデルディレクトリ（省略時は初回実行時にキャッシュへダウンロード）",
     )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--sensevoice-quantization",
         choices=("none", "int8", "int4"),
         default="int8",
-        help="SenseVoice ONNX model variant",
+        help="ONNXモデルの量子化（既定: int8。int4 は公式配布モデルが登録されている場合のみ）",
     )
-    parser.add_argument(
-        "--sensevoice-cache-dir", help="SenseVoice model cache directory"
+    sensevoice.add_argument(
+        "--sensevoice-cache-dir",
+        help="SenseVoiceモデルのキャッシュ先（既定: ~/.cache/podcastpreprocessor/）",
     )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--sensevoice-audio-cache-dir",
-        help="converted-audio cache directory (default: ~/.cache/podcastpreprocessor/converted)",
+        help="16kHzモノラルWAVへの変換キャッシュ先（既定: ~/.cache/podcastpreprocessor/converted）",
     )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--sensevoice-num-threads",
         type=int,
         default=4,
-        help="SenseVoice CPU inference thread count",
+        help="CPU推論のスレッド数（既定: 4）",
     )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--sensevoice-provider",
         choices=("cpu", "cuda", "coreml"),
         default="cpu",
-        help="SenseVoice ONNX Runtime provider",
+        help="ONNX Runtimeのプロバイダ（既定: cpu）",
     )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--sensevoice-chunk-duration-s",
         type=float,
         default=30.0,
-        help="SenseVoice audio chunk duration in seconds",
+        help="文字起こしを進めるチャンクの長さ（秒、既定: 30）。途中経過はこの単位で保存され、再実行時に再開できます",
     )
-    parser.add_argument(
-        "--sensevoice-vad",
-        action="store_true",
-        help="skip non-speech regions with lightweight energy VAD",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-threshold-db",
-        type=float,
-        default=-40.0,
-        help="VAD threshold relative to the loudest frame in dB",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-padding-s",
-        type=float,
-        default=0.25,
-        help="speech padding added around VAD regions in seconds",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-model",
-        help="local Silero VAD ONNX model (default: download to cache)",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-threshold",
-        type=float,
-        default=0.5,
-        help="Silero VAD speech probability threshold",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-min-silence-s",
-        type=float,
-        default=0.25,
-        help="minimum silence duration used to end a speech region",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-min-speech-s",
-        type=float,
-        default=0.1,
-        help="minimum speech duration to retain",
-    )
-    parser.add_argument(
-        "--sensevoice-vad-max-speech-s",
-        type=float,
-        default=120.0,
-        help="maximum duration of one VAD speech region",
-    )
-    parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="do not download a missing SenseVoice model",
-    )
-    parser.add_argument("--language", default="ja", help="SenseVoice language code")
-    parser.add_argument(
-        "--use-itn",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="enable SenseVoice inverse text normalization",
-    )
-    parser.add_argument(
+    sensevoice.add_argument(
         "--batch-size-s",
         type=int,
         default=60,
-        help="SenseVoice batch duration in seconds",
+        help="1回の推論にまとめる音声の長さ（秒、既定: 60）",
     )
-    parser.add_argument("--device", default="auto", help="inference device")
-    parser.add_argument(
-        "--compute-type", default="default", help="faster-whisper compute type"
+    sensevoice.add_argument(
+        "--language", default="ja", help="SenseVoiceの言語コード（既定: ja）"
     )
-    parser.add_argument("--fps", type=int, default=30, help="timeline frame rate")
-    parser.add_argument("--sequence-name", default="Podcast_Timeline")
-    parser.add_argument(
-        "--acoustic-fillers",
+    sensevoice.add_argument(
+        "--use-itn",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="逆テキスト正規化（ITN: 数字・日付などの表記変換）を使う（既定: 有効。無効化は --no-use-itn）",
+    )
+    sensevoice.add_argument(
+        "--offline",
         action="store_true",
-        help="detect filler candidates from the audio signal and mark them "
-        "on the audio clips (works even when the transcription backend "
-        "drops fillers, e.g. SenseVoice)",
+        help="モデルをダウンロードせず、キャッシュ済みのモデルだけで実行する",
     )
-    parser.add_argument(
+
+    vad = parser.add_argument_group("SenseVoice VAD のオプション（--sensevoice-vad 指定時）")
+    vad.add_argument(
+        "--sensevoice-vad",
+        action="store_true",
+        help="Silero VADで発話区間だけを検出して推論する（無音が多い音声で高速化します）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-model",
+        help="ローカルのSilero VAD ONNXモデル（省略時はキャッシュへダウンロード）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-threshold",
+        type=float,
+        default=0.5,
+        help="発話確率のしきい値（既定: 0.5）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-min-silence-s",
+        type=float,
+        default=0.25,
+        help="発話区間を終端する最小の無音長（秒、既定: 0.25）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-min-speech-s",
+        type=float,
+        default=0.1,
+        help="保持する最小の発話長（秒、既定: 0.1）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-max-speech-s",
+        type=float,
+        default=120.0,
+        help="1つの発話区間の最大長（秒、既定: 120）。長い発話だけこの長さで分割します",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-padding-s",
+        type=float,
+        default=0.25,
+        help="発話区間の前後に付ける余白（秒、既定: 0.25）",
+    )
+    vad.add_argument(
+        "--sensevoice-vad-threshold-db",
+        type=float,
+        default=-40.0,
+        help="エネルギーVADのしきい値（最大フレームに対するdB、既定: -40）",
+    )
+
+    cache = parser.add_argument_group("キャッシュのオプション")
+    cache.add_argument(
         "--cache-dir",
         default=None,
-        help="transcript cache directory (default: ~/.cache/podcastpreprocessor/transcripts)",
+        help="文字起こしキャッシュの保存先（既定: ~/.cache/podcastpreprocessor/transcripts）",
     )
-    parser.add_argument(
+    cache.add_argument(
         "--no-cache",
         action="store_true",
-        help="do not reuse or store cached transcripts",
+        help="文字起こしキャッシュを使わない・保存しない",
     )
     return parser
 

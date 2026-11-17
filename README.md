@@ -1,98 +1,106 @@
-# PodcastPreprocessor
+# PodcastPreprocessor（Voice2OTIO4Podcast）
 
-日本語ポッドキャストの音声ファイル群を文字起こしし、字幕・カット候補・元音声をリンクしたOpenTimelineIO（`.otio`）を生成します。
+日本語ポッドキャストの音声を文字起こしし、**字幕と「カット候補」の目印が付いたタイムライン**を生成するツールです。
 
-## セットアップ
+出力はOpenTimelineIO（`.otio`）形式で、DaVinci Resolveに読み込んでそのまま編集を始められます。音声は切り取らず元の時間軸をすべて保持し、無音・フィラー・言い直しなどの「切ってもよさそうな箇所」には目印を付けるだけなので、最終判断は編集者が行えます。
 
-```powershell
-uv sync --extra dev
+## 使い方の流れ
+
+1. 話者ごとに分かれた音声ファイルを用意する（1ファイル = 1話者）
+2. このツールを実行し、`.otio` と `.srt` を生成する
+3. DaVinci Resolveに `.otio` をインポートする
+4. 「目印トラック」にある `[要カット: 理由]` のクリップを目安に、対応する音声スライスを削除していく
+
+## クイックスタート
+
+必要なもの: Python 3.10以上と [uv](https://docs.astral.sh/uv/)。
+
+```bash
+# インストール（faster-whisperバックエンド）
+uv sync
+
+# 実行（話者1人）
+uv run podcast-preprocessor speaker_a.wav podcast.otio
 ```
 
-faster-whisperのモデルとSudachi辞書は初回セットアップ時に取得されます。CPUではメモリ使用量を抑えるため、`small`モデルと`int8`を指定してください。
+初回実行時に文字起こしモデルがダウンロードされます。同じ場所に字幕ファイル `podcast.srt` も生成されます。
 
-SenseVoiceSmall を使用する場合は、追加依存をインストールします。
+話者が2人の場合:
 
-```powershell
-uv sync --extra dev --extra sensevoice
+```bash
+uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio
 ```
 
-## 実行
+CPUで実行する場合は、軽量な設定を指定してください。
 
-```powershell
-uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --model small --device cpu --compute-type int8 --fps 30
+```bash
+uv run podcast-preprocessor speaker_a.wav podcast.otio --model small --device cpu --compute-type int8
 ```
 
-backend は `--backend` で選択できます。既定値は `faster-whisper` です。
+SenseVoiceバックエンドを使う場合は、追加依存をインストールして `--backend sensevoice` を指定します。
 
-```powershell
-uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --device cpu --fps 30
+```bash
+uv sync --extra sensevoice
+uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice
 ```
 
-SenseVoice は初回実行時に公式 sherpa-onnx モデルをキャッシュへダウンロードします。CPU では既定の `int8` が推奨です。
+オプションの一覧は `uv run podcast-preprocessor --help` で確認できます。詳しい使い方は [docs/usage.md](docs/usage.md) を参照してください。
 
-```powershell
-uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-quantization int8 --sensevoice-num-threads 8 --sensevoice-chunk-duration-s 30
-```
+## 出力の構成
 
-無音区間を推論しないSilero VADを使う場合は `--sensevoice-vad` を追加します。初回実行時にVADモデルを既定のキャッシュへ保存し、`--offline`ではキャッシュ済みモデルだけを使用します。
+音声ファイルごとに、次の3トラックが生成されます。
 
-```powershell
-uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice --sensevoice-vad --sensevoice-quantization int8
-```
+| トラック | 内容 |
+| --- | --- |
+| 目印トラック | カット候補の箇所にだけ `[要カット: 理由]` クリップを配置 |
+| 字幕トラック | 文節境界で分割された字幕 |
+| 音声トラック | 元音声を字幕境界でスライスしたもの（全時間を保持） |
 
-モデルは通常 `~/.cache/podcastpreprocessor/` に保存されます。ネットワークを使わず既存キャッシュだけで実行する場合は `--offline`、手動配置したSenseVoiceモデルは `--sensevoice-model`、VADモデルは `--sensevoice-vad-model` で指定します。VAD区間は原則1回の推論へ渡し、長い発話だけ `--sensevoice-vad-max-speech-s` で分割します。VADの感度は `--sensevoice-vad-threshold`、発話区間の結合は `--sensevoice-vad-min-silence-s`、前後余白は `--sensevoice-vad-padding-s` で調整できます。`int4` は公式配布モデルが登録されている場合のみ使用できます。
+同じ箇所の3要素は `Resolve_OTIO.Link Group ID` で相互リンクされるため、Resolve上で連動して選択・削除できます。カット候補には判定理由（例: `判定: フィラー (えーと)`）と赤ラベル相当のメタデータが付きます。
 
-上記の実行では、指定したOTIOと同じ場所に `podcast.srt` も生成されます。SRTの出力先を変更する場合は `--srt-output` を指定します。
+## 何をカット候補にするか
 
-```powershell
-uv run podcast-preprocessor speaker_a.wav speaker_b.wav podcast.otio --srt-output subtitles.srt
-```
+- **無音**: 0.4秒を超える間隔
+- **フィラー**: 「えーと」「あのー」など。字幕分割の段階で独立したスライスになるため、前後の発話を巻き込まずに切れます
+- **低信頼度**: `no_speech_prob > 0.8` の区間
+- **言い直し**: 直後の発話に言い直された発話と、発話冒頭の繰り返し。トークン列（単語タイムスタンプ）から試行の範囲を特定し、試行だけを独立スライスにします
 
-`turbo`など大きいモデルをCPUで読み込めない場合は、`base`または`tiny`に下げてください。モデルの読み込みに失敗した場合、CLIは利用可能な設定を案内して終了します。
+`--acoustic-fillers` を付けると、音声信号からもフィラー候補を検出し、音声クリップに黄色マーカーで付けます。SenseVoiceのようにフィラーを文字起こしへ残さないバックエンドでも候補を拾えます（精度はテキストベースより劣るため、自動スライスにはせずマーカー提示のみです）。
 
-処理は次の順で進みます。
+## バックエンドの選び方
 
-1. 選択した文字起こし backend で日本語音声を単語タイムスタンプ付きで認識
-2. 句読点、文字数、表示時間を基準に字幕を分割（境界は文節の先頭にのみ置き、単語や文節の途中では切らない。フィラーは独立した字幕・スライスとして切り出す）
-3. 0.4秒超の無音、フィラー、`no_speech_prob > 0.8`、言い直し（直後の発話に言い直された発話、冒頭の繰り返し）をカット候補として判定
-4. DaVinci Resolve向けのOTIOとSRTを出力
+| | faster-whisper（既定） | SenseVoice |
+| --- | --- | --- |
+| 特徴 | 精度を調整しやすい。GPU対応 | 高速で軽量。日本語に強い |
+| フィラー | 文字起こしに残る | 文字起こしから落ちる（`--acoustic-fillers` の併用がおすすめ） |
+| 追加依存 | なし | `uv sync --extra sensevoice` |
+| 向いている用途 | 迷ったらこちら | 長時間の音声を速く処理したいとき |
 
-入力ファイルは指定順に `source_1`、`source_2` として別々の話者/音声トラックになります。1ファイル内の話者分離は行いません。
+## 主な機能
 
-## OTIO構成
+- **字幕分割**: SudachiPyの文節境界でのみ分割し、単語や文節の途中で切らない（最大20文字 / 最大4秒が目安）
+- **キャッシュと再開**: 文字起こし結果はファイルごとにキャッシュされ、途中失敗しても再実行で続きから処理できます。SenseVoiceではチャンク（既定30秒）単位の途中経過も保存されます
+- **音声変換（SenseVoice時）**: 入力音声は16kHzモノラルWAVへ変換されてから推論されるため、m4aなども扱えます。変換結果はキャッシュされます
+- **VAD（SenseVoice時）**: `--sensevoice-vad` でSilero VADが発話区間だけを推論し、無音の多い音声を高速化します
+- **進捗表示**: 処理中は全体の進捗率を標準エラーへ表示します（端末接続時のみ）
 
-音声ソースごとに、目印・字幕・音声の3トラックを生成します。正常区間は字幕と音声、カット候補区間は目印・字幕・音声の3要素を `metadata.Resolve_OTIO.Link Group ID` で相互リンクします。候補クリップには判定理由と赤ラベル相当のメタデータを付与します。
+## ドキュメント
 
-音声トラックは先頭から末尾まで保持します。字幕間、先頭、末尾のギャップもOTIOの `Gap` または音声スライスとして出力し、カット候補を検出しても元の時間軸を短縮しません。
-
-Whisperモデルなしの固定データ検証は `process_segments` または `process_sources` から実行できます。単体テストではOTIOの再読込、トラック構造、リンクID、音声の連続性、SudachiPyによる分割を検証します。
+- [docs/usage.md](docs/usage.md) — 使い方の詳細、全オプション、レシピ、トラブルシューティング
+- [docs/specification.md](docs/specification.md) — システム仕様書
+- [docs/detailed_design.md](docs/detailed_design.md) — 詳細設計書（モジュール構成と判定ルール）
 
 ## 既知の制約
 
-- 初期互換性対象はDaVinci Resolve、固定タイムベースの既定値は30fpsです。
-- `Resolve_OTIO` のリンク動作、ラベル表示、マーカー表示はResolveのバージョンによって実機確認が必要です。
-- 音声は物理的に削除せず、字幕境界に合わせたOTIO上のスライスとして保持します。
-- 異なるサンプルレートやチャンネル数の音声をミックス・変換する処理は行いません。
-- 文字起こし backend は `RawSegment` と単語タイムスタンプを返す必要があります。単語タイムスタンプを返せない SenseVoice 推論経路は利用できません。
-- SenseVoiceSmall の依存は `uv sync --extra sensevoice` で追加します。モデルは sherpa-onnx の公式 release から取得し、SHA256 を検証します。モデルのライセンスと取得条件は配布元を確認してください。
+- 対応編集ソフトはDaVinci Resolveを想定しています。`Resolve_OTIO` のリンク動作やラベル・マーカー表示は、Resolveのバージョンによって実機確認が必要です
+- 1ファイル内の話者分離は行いません。話者はファイル単位で分けてください
+- 音声は物理的に削除しません。削除はResolve上で行います
+- 文字起こしバックエンドは単語タイムスタンプを返す必要があります。単語タイムスタンプを返せないSenseVoice推論経路は利用できません
+- SenseVoiceのモデルはsherpa-onnxの公式releaseから取得し、SHA256を検証します。モデルのライセンスと取得条件は配布元を確認してください
 
-## 音響フィラー候補（任意）
+## 開発
 
-`--acoustic-fillers` を付けると、文字起こしとは独立に音声信号からフィラー候補を検出し、OTIOの音声クリップに黄色マーカー「フィラー候補」として付けます。SenseVoiceのようにフィラーを文字起こしから落とすバックエンドでも候補を拾えます。
-
-検出は信号処理のみ（ポーズに挟まれた短い音の島＋内部の音高・スペクトルの安定性）で、精度はテキストベースの検出より劣ります。そのため候補は自動でスライスにせず、マーカーとして提示します。編集時に聞いて確認してから切ってください。
-
-## 音声の前処理（変換・リサンプリング）
-
-SenseVoiceバックエンドでは、入力音声は文字起こしの前に16kHzモノラルWAVへ変換されます。変換はPyAV（libswresample）によるストリーミング処理で、変換結果はキャッシュされるため再実行時は省略されます。変換の途中経過も30秒単位でジャーナルに保存されるため、長時間の変換が途中で止まっても、再実行時は続きから再開されます（既定: `~/.cache/podcastpreprocessor/converted/`、`--sensevoice-audio-cache-dir` で変更可）。これにより、m4aなどsoundfileが直接読めない形式も扱えます。
-
-## 文字起こしキャッシュと再開
-
-文字起こし結果はファイルごとにキャッシュされます（既定: `~/.cache/podcastpreprocessor/transcripts/`）。途中で処理が失敗しても、同じ入力ファイルと同じ設定で再実行すれば、文字起こし済みのファイルはキャッシュから読み込まれ、続きから再開できます。全ファイルがキャッシュ済みならモデル自体も読み込まれません。
-
-さらにSenseVoiceバックエンドでは、文字起こしの途中経過もチャンク（既定30秒）単位でジャーナルに保存されます。長時間の文字起こしの途中でプロセスが落ちたり止められたりしても、完了したチャンクは再実行時に再利用され、残りのチャンクだけが処理されます（faster-whisperは生成器ベースのためファイル単位のキャッシュのみです）。
-
-- `--cache-dir PATH`: キャッシュ先を変更する
-- `--no-cache`: キャッシュを使わない・保存しない
-
-キャッシュのキーは入力ファイルのパス・サイズ・更新時刻と、バックエンドやモデル等の文字起こし設定から決まります。入力ファイルや設定が変われば自動で再文字起こしされます。
+```bash
+uv sync --extra dev
+uv run pytest
+```
