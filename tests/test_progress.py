@@ -119,3 +119,65 @@ def test_processing_phase_uses_final_weight() -> None:
 
     assert reporter.ratio == pytest.approx(TRANSCRIPTION_WEIGHT)
     assert pytest.approx(0.1) == PROCESSING_WEIGHT
+
+
+def test_render_writes_exact_bar_line() -> None:
+    stream = TTYBuffer()
+    reporter = ProgressReporter(stream, total_files=1)
+
+    reporter.phase("/audio/episode.wav", "読み込み")
+    assert stream.getvalue() == "\r[" + "-" * 30 + "]  0.0% 読み込み episode.wav"
+
+    reporter("/audio/episode.wav", 10.0, 10.0)
+    assert stream.getvalue().endswith(
+        "\r[" + "#" * 27 + "-" * 3 + "] 90.0% 文字起こし episode.wav"
+    )
+
+
+def test_render_counter_only_for_multiple_files() -> None:
+    stream = TTYBuffer()
+    reporter = ProgressReporter(stream, total_files=2)
+
+    reporter.phase("/audio/a.wav", "読み込み")
+    assert stream.getvalue().endswith("読み込み a.wav (1/2)")
+
+    reporter.phase("/audio/b.wav", "読み込み")
+    assert stream.getvalue().endswith("読み込み b.wav (2/2)")
+
+    # A third distinct path cannot push the counter past the total.
+    reporter.phase("/audio/c.wav", "読み込み")
+    assert stream.getvalue().endswith("読み込み c.wav (2/2)")
+
+
+def test_finish_renders_full_bar_and_newline() -> None:
+    stream = TTYBuffer()
+    reporter = ProgressReporter(stream, total_files=1)
+
+    reporter.finish()
+
+    assert stream.getvalue() == "\r[" + "#" * 30 + "] 100.0% 完了\n"
+
+
+def test_ratio_for_clamps_fraction() -> None:
+    reporter = ProgressReporter(io.StringIO(), total_files=1)
+
+    assert reporter.ratio_for(0, "transcribe", 2.0) == pytest.approx(
+        TRANSCRIPTION_WEIGHT
+    )
+    assert reporter.ratio_for(0, "prepare", -1.0) == 0.0
+    assert reporter.ratio_for(0, "processing", 2.0) == pytest.approx(1.0)
+
+
+def test_ratio_never_decreases_and_zero_duration_is_tolerated() -> None:
+    stream = TTYBuffer()
+    reporter = ProgressReporter(stream, total_files=1)
+
+    reporter("/audio/a.wav", 10.0, 10.0)
+    reached = reporter.ratio
+    reporter.phase("/audio/a.wav", "読み込み")
+    assert reporter.ratio == reached
+
+    reporter("/audio/a.wav", 5.0, 0.0)
+    assert reporter.ratio == reached
+    reporter("/audio/a.wav", 5.0, -3.0)
+    assert reporter.ratio == reached

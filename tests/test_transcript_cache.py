@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from podcastpreprocessor.models import RawSegment, WordTimestamp
 from podcastpreprocessor.transcript_cache import (
     cache_key,
@@ -139,3 +141,158 @@ def test_chunk_cache_journals_and_tolerates_torn_line(tmp_path: Path) -> None:
     assert 2 not in entries
     store.clear()
     assert store.load() == {}
+
+
+def test_cache_key_is_stable_hex_and_order_insensitive(tmp_path: Path) -> None:
+    audio = _audio(tmp_path)
+    key = cache_key(str(audio), SETTINGS)
+
+    assert len(key) == 64
+    assert all(char in "0123456789abcdef" for char in key)
+    assert cache_key(str(audio), SETTINGS) == key
+    reordered = {"model": "small", "backend": "sensevoice"}
+    assert cache_key(str(audio), reordered) == key
+
+
+def test_cache_key_changes_with_mtime_only(tmp_path: Path) -> None:
+    audio = _audio(tmp_path)
+    base = cache_key(str(audio), SETTINGS)
+
+    stat = audio.stat()
+    audio.touch()
+    import os
+
+    os.utime(audio, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert cache_key(str(audio), SETTINGS) != base
+
+
+def test_cache_key_matches_for_relative_and_absolute_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = _audio(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert cache_key("episode.wav", SETTINGS) == cache_key(str(audio), SETTINGS)
+
+
+def test_cache_round_trip_preserves_all_fields(tmp_path: Path) -> None:
+    key = cache_key(str(_audio(tmp_path)), SETTINGS)
+    save_cached(tmp_path, key, [_segment()], None)
+
+    loaded = load_cached(tmp_path, key, "source_2")
+
+    assert loaded is not None
+    segments, duration = loaded
+    assert duration is None
+    assert segments == [_segment("source_2")]
+
+
+def test_load_cached_missing_file_is_a_miss(tmp_path: Path) -> None:
+    assert load_cached(tmp_path, "0" * 64, "source_1") is None
+
+
+def test_save_cached_creates_directories_and_leaves_no_temp_file(
+    tmp_path: Path,
+) -> None:
+    key = cache_key(str(_audio(tmp_path)), SETTINGS)
+    nested = tmp_path / "deep" / "cache"
+
+    save_cached(nested, key, [_segment()], 1.0)
+
+    assert load_cached(nested, key, "source_1") is not None
+    assert not (nested / f"{key}.json.tmp").exists()
+    raw = (nested / f"{key}.json").read_bytes()
+    assert "えーと、今日は".encode() in raw
+
+
+def test_transcribe_sources_cached_miss_side_effects(tmp_path: Path) -> None:
+    first = _audio(tmp_path)
+    second = tmp_path / "track2.wav"
+    second.write_bytes(b"second track")
+    fake = _FakeTranscriber()
+    hits: list[str] = []
+    phases: list[object] = []
+
+    def phase_callback(*args: object) -> None:
+        phases.append(args)
+
+    results = transcribe_sources_cached(
+        lambda: fake,
+        [str(first), str(second)],
+        SETTINGS,
+        tmp_path,
+        phase_callback=phase_callback,
+        on_cache_hit=hits.append,
+    )
+
+    assert hits == []
+    # Segments returned by the transcriber are renumbered by position.
+    assert results[0][2][0].source_id == "source_1"
+    assert results[1][2][0].source_id == "source_2"
+    assert results[0][3] == 30.0
+
+
+def test_transcribe_sources_cached_hit_reports_progress(tmp_path: Path) -> None:
+    audio = _audio(tmp_path)
+    key = cache_key(str(audio), SETTINGS)
+    save_cached(tmp_path, key, [_segment()], None)
+    progress: list[tuple] = []
+
+    def build() -> _FakeTranscriber:
+        raise AssertionError("transcriber must not be built on a full hit")
+
+    results = transcribe_sources_cached(
+        build,
+        [str(audio)],
+        SETTINGS,
+        tmp_path,
+        progress_callback=lambda *args: progress.append(args),
+    )
+
+    assert progress == [(str(audio), 0.0, None)]
+    assert results[0][3] is None
+
+
+def test_transcribe_sources_cached_tolerates_missing_audio(tmp_path: Path) -> None:
+    missing = tmp_path / "gone.wav"
+    fake = _FakeTranscriber()
+
+    results = transcribe_sources_cached(
+        lambda: fake, [str(missing)], SETTINGS, tmp_path
+    )
+
+    assert fake.calls == [str(missing)]
+    assert results[0][2][0].text == "えーと、今日は"
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_chunk_cache_later_line_wins_and_clear_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    from podcastpreprocessor.transcript_cache import ChunkCache
+
+    store = ChunkCache(tmp_path / "key.jsonl")
+    assert store.load() == {}
+    store.clear()
+
+    store.store(0, _segment())
+    updated = _segment()
+    updated.text = "差し替え"
+    store.store(0, updated)
+
+    entries = store.load()
+    first = entries[0]
+    assert first is not None
+    assert first.text == "差し替え"
+
+    import json
+
+    line = (tmp_path / "key.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    payload = json.loads(line)
+    assert payload["chunk"] == 0
+    assert payload["segment"]["words"][0] == {
+        "word": "えーと、",
+        "start": 1.0,
+        "end": 1.8,
+        "probability": 0.9,
+    }

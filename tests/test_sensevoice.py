@@ -327,3 +327,117 @@ def test_sensevoice_resumes_from_chunk_cache_after_crash(
     assert [segment.id for segment in segments] == [0, 1, 2, 3]
     # The journal is cleaned up once the transcription completes.
     assert list((cache_dir / "partials").glob("*.jsonl")) == []
+
+
+def test_speech_segments_to_regions_validates_arguments() -> None:
+    with pytest.raises(ValueError, match="sample_rate must be positive"):
+        speech_segments_to_regions([], sample_rate=0, audio_length=100)
+    with pytest.raises(ValueError, match="sample_rate must be positive"):
+        speech_segments_to_regions([], sample_rate=-16000, audio_length=100)
+    with pytest.raises(ValueError, match="audio_length must be non-negative"):
+        speech_segments_to_regions([], sample_rate=16000, audio_length=-1)
+    with pytest.raises(ValueError, match="padding_s must be non-negative"):
+        speech_segments_to_regions(
+            [], sample_rate=16000, audio_length=100, padding_s=-0.01
+        )
+
+    assert speech_segments_to_regions([], sample_rate=16000, audio_length=0) == []
+
+
+def test_speech_segments_to_regions_uses_end_seconds_without_samples() -> None:
+    segments = [SimpleNamespace(start=500, end=1.5)]
+
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+
+    assert regions == [(500, 1500)]
+
+    segments = [SimpleNamespace(start=500, end=2.0, samples=None)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+
+    assert regions == [(500, 2000)]
+
+
+def test_speech_segments_to_regions_rounds_start_index() -> None:
+    segments = [SimpleNamespace(start=100.5, samples=[0.0] * 10)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(100, 110)]
+
+    segments = [SimpleNamespace(start=101.5, samples=[0.0] * 10)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(102, 112)]
+
+
+def test_speech_segments_to_regions_drops_out_of_range_segments() -> None:
+    segments = [SimpleNamespace(start=5000, samples=[0.0] * 100)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == []
+
+    segments = [SimpleNamespace(start=-100, samples=[0.0] * 50)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == []
+
+    segments = [SimpleNamespace(start=-100, samples=[0.0] * 200)]
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(0, 100)]
+
+
+def test_speech_segments_to_regions_merge_boundaries() -> None:
+    touching = [
+        SimpleNamespace(start=1000, samples=[0.0] * 100),
+        SimpleNamespace(start=1100, samples=[0.0] * 100),
+    ]
+    regions = speech_segments_to_regions(
+        touching, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(1000, 1200)]
+
+    separate = [
+        SimpleNamespace(start=1000, samples=[0.0] * 100),
+        SimpleNamespace(start=1101, samples=[0.0] * 100),
+    ]
+    regions = speech_segments_to_regions(
+        separate, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(1000, 1100), (1101, 1201)]
+
+    contained = [
+        SimpleNamespace(start=1000, samples=[0.0] * 500),
+        SimpleNamespace(start=1200, samples=[0.0] * 100),
+    ]
+    regions = speech_segments_to_regions(
+        contained, sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(1000, 1500)]
+
+
+def test_speech_segments_to_regions_padding_rounding() -> None:
+    segments = [SimpleNamespace(start=1000, samples=[0.0] * 100)]
+
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0005
+    )
+    assert regions == [(1000, 1100)]
+
+    regions = speech_segments_to_regions(
+        segments, sample_rate=1000, audio_length=3000, padding_s=0.0015
+    )
+    assert regions == [(998, 1102)]
+
+    regions = speech_segments_to_regions(
+        iter(segments), sample_rate=1000, audio_length=3000, padding_s=0.0
+    )
+    assert regions == [(1000, 1100)]
