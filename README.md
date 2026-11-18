@@ -101,6 +101,19 @@ uv run podcast-preprocessor speaker_a.wav podcast.otio --backend sensevoice
 ## 開発
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra sensevoice
 uv run pytest
 ```
+
+CIと同じチェックは手元でも回せます（PRではすべて必須です）。
+
+```bash
+uv run ruff format --check .   # フォーマット
+uv run ruff check .            # リント
+uv run mypy src/podcastpreprocessor  # 型チェック（strict）
+uv run pytest                  # テスト＋カバレッジ（下限80%）
+uv run mutmut run              # ミューテーションテスト（週次CIでも実行）
+```
+
+- テストにはHypothesisによるプロパティベーステスト（`tests/test_properties.py`）を含みます
+- 依存関係の脆弱性チェック（pip-audit）と、ビルドしたwheelのクリーンインストール確認もCIで回しています

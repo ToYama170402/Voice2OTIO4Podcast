@@ -109,7 +109,9 @@ def test_pause_inside_long_token_still_pairs_attempts() -> None:
     words[-1] = WordTimestamp("は", words[-1].start, words[-1].start + 1.2, 1.0)
     pause_end = words[-1].end
     words += char_words("3列シートでワンセット", pause_end, step=0.15)
-    segment = RawSegment(1, 0.0, words[-1].end, "3列シートは3列シートでワンセット", 0.0, words)
+    segment = RawSegment(
+        1, 0.0, words[-1].end, "3列シートは3列シートでワンセット", 0.0, words
+    )
     regions = token_restart_regions([segment])
     assert len(regions) == 1
     assert regions[0].text.startswith("3列シート")
@@ -162,7 +164,5 @@ def test_process_segments_splits_within_segment_restart(tmp_path) -> None:
     assert len(attempts) == 1
     assert attempts[0].subtitle_text == "この辺は"
     # The pieces tile the whole segment: nothing is lost.
-    total_frames = sum(
-        segment.end_frame - segment.start_frame for segment in processed
-    )
+    total_frames = sum(segment.end_frame - segment.start_frame for segment in processed)
     assert total_frames == processed[-1].end_frame - processed[0].start_frame

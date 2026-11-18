@@ -1,7 +1,7 @@
 """Rule-based cut-candidate evaluation."""
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from .models import RefinedSegment
 
@@ -74,11 +74,19 @@ def evaluate_text_pattern(
     segment: RefinedSegment,
     pattern: str,
     previous_end: float | None = None,
-    **kwargs: object,
+    pause_threshold: float = 0.4,
+    no_speech_threshold: float = 0.8,
+    fillers: tuple[str, ...] = DEFAULT_FILLERS,
 ) -> Evaluation:
     """Apply the standard rules plus a caller-provided filler pattern."""
+    evaluation = evaluate_segment(
+        segment,
+        previous_end=previous_end,
+        pause_threshold=pause_threshold,
+        no_speech_threshold=no_speech_threshold,
+        fillers=fillers,
+    )
     if not re.search(pattern, segment.text):
-        return evaluate_segment(segment, previous_end=previous_end, **kwargs)
-    evaluation = evaluate_segment(segment, previous_end=previous_end, **kwargs)
+        return evaluation
     reasons = (*evaluation.reasons, f"フィラー ({segment.text})")
     return Evaluation(True, reasons)

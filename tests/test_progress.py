@@ -118,4 +118,4 @@ def test_processing_phase_uses_final_weight() -> None:
     reporter.start_processing()
 
     assert reporter.ratio == pytest.approx(TRANSCRIPTION_WEIGHT)
-    assert PROCESSING_WEIGHT == pytest.approx(0.1)
+    assert pytest.approx(0.1) == PROCESSING_WEIGHT

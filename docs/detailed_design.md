@@ -136,12 +136,13 @@ clip.metadata["Resolve_OTIO"] = {"Link Group ID": link_group_id}
 @dataclass(frozen=True)
 class WordTimestamp:
     word: str
-    start: float          # 秒
-    end: float            # 秒
+    start: float  # 秒
+    end: float  # 秒
     probability: float
 
+
 @dataclass
-class RawSegment:         # バックエンドの生出力
+class RawSegment:  # バックエンドの生出力
     id: int
     start: float
     end: float
@@ -150,8 +151,9 @@ class RawSegment:         # バックエンドの生出力
     words: list[WordTimestamp]
     source_id: str = "source_1"
 
+
 @dataclass
-class RefinedSegment:     # 字幕分割後
+class RefinedSegment:  # 字幕分割後
     segment_id: str
     track_index: int
     start: float
@@ -161,14 +163,16 @@ class RefinedSegment:     # 字幕分割後
     words: list[WordTimestamp]
     source_id: str = "source_1"
 
+
 @dataclass(frozen=True)
-class ClipMarker:         # 音声クリップ内のマーカー（クリップ先頭からのフレーム）
+class ClipMarker:  # 音声クリップ内のマーカー（クリップ先頭からのフレーム）
     name: str
     start_frame: int
     end_frame: int
 
+
 @dataclass
-class ProcessedSegment:   # 判定後、OTIO生成の入力
+class ProcessedSegment:  # 判定後、OTIO生成の入力
     segment_id: str
     track_index: int
     start_frame: int
@@ -177,9 +181,9 @@ class ProcessedSegment:   # 判定後、OTIO生成の入力
     out_frame: int
     subtitle_text: str
     is_cut_candidate: bool = False
-    flag_label: str = ""        # 例: "[要カット: フィラー (えーと)]"
-    marker_reason: str = ""     # 例: "判定: フィラー (えーと)"
-    color_label: str = "None"   # 候補は "Red"
+    flag_label: str = ""  # 例: "[要カット: フィラー (えーと)]"
+    marker_reason: str = ""  # 例: "判定: フィラー (えーと)"
+    color_label: str = "None"  # 候補は "Red"
     source_id: str = "source_1"
     audio_path: str = ""
     link_group_id: int = 0

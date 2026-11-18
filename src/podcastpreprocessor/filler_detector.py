@@ -12,10 +12,15 @@ markers on the audio clips so an editor can audition and cut them by
 hand, instead of becoming slices automatically.
 """
 
-from dataclasses import dataclass
 import math
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
+
+from .models import RawSegment, WordTimestamp
 
 TARGET_SAMPLE_RATE = 16000
 _FRAME_SECONDS = 0.025
@@ -30,6 +35,8 @@ _MIN_PAUSE_SECONDS = 0.18
 _MIN_VOICED_FRACTION = 0.45
 _MAX_F0_CV = 0.28
 _VOICING_PEAK = 0.45
+_MAX_TOKENIZE_BYTES = 40_000
+_MIN_F0_FRAMES = 4
 
 
 @dataclass(frozen=True)
@@ -62,10 +69,10 @@ class FillerRegion:
 # against Whisper-derived ground truth; the union with the acoustic
 # candidates reaches about 30% precision and 26% recall.
 
-_TOKENIZER = None
+_TOKENIZER: Any = None
 
 
-def _tokenizer():
+def _tokenizer() -> Any:
     global _TOKENIZER
     if _TOKENIZER is None:
         from sudachipy import Dictionary
@@ -74,7 +81,41 @@ def _tokenizer():
     return _TOKENIZER
 
 
-def token_filler_regions(segments) -> list[FillerRegion]:
+def _token_fillers_for_words(
+    words: list[WordTimestamp], tokenizer: Any
+) -> list[FillerRegion]:
+    """Filler regions inside one segment's word tokens."""
+    from sudachipy import SplitMode
+
+    from .evaluator import is_filler_text
+
+    text = "".join(w.word for w in words)
+    if len(text.encode("utf-8")) > _MAX_TOKENIZE_BYTES:
+        # Sudachi rejects very long inputs; ASR segments are short,
+        # so this is only a safeguard.
+        return []
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for w in words:
+        spans.append((offset, offset + len(w.word)))
+        offset += len(w.word)
+    regions: list[FillerRegion] = []
+    for morpheme in tokenizer.tokenize(text, SplitMode.A):
+        if not is_filler_text(morpheme.surface()):
+            continue
+        begin, end = morpheme.begin(), morpheme.end()
+        covered = [words[i] for i, (s, e) in enumerate(spans) if s < end and begin < e]
+        if covered:
+            regions.append(
+                FillerRegion(
+                    start=min(w.start for w in covered),
+                    end=max(w.end for w in covered),
+                )
+            )
+    return regions
+
+
+def token_filler_regions(segments: Iterable[RawSegment]) -> list[FillerRegion]:
     """Filler regions from word timestamps via Sudachi word boundaries.
 
     ``segments`` are RawSegment-like objects whose ``words`` carry
@@ -83,47 +124,17 @@ def token_filler_regions(segments) -> list[FillerRegion]:
     back to the timestamps of the tokens it spans. Segments without
     word timestamps contribute nothing.
     """
-    from sudachipy import SplitMode
-
-    from .evaluator import is_filler_text
-
     tokenizer = _tokenizer()
     regions: list[FillerRegion] = []
     for segment in segments:
         words = [w for w in segment.words if w.word]
-        if not words:
-            continue
-        text = "".join(w.word for w in words)
-        spans: list[tuple[int, int]] = []
-        offset = 0
-        for w in words:
-            spans.append((offset, offset + len(w.word)))
-            offset += len(w.word)
-        if len(text.encode("utf-8")) > 40_000:
-            # Sudachi rejects very long inputs; ASR segments are short,
-            # so this is only a safeguard.
-            continue
-        for morpheme in tokenizer.tokenize(text, SplitMode.A):
-            if not is_filler_text(morpheme.surface()):
-                continue
-            begin, end = morpheme.begin(), morpheme.end()
-            covered = [
-                words[i]
-                for i, (s, e) in enumerate(spans)
-                if s < end and begin < e
-            ]
-            if covered:
-                regions.append(
-                    FillerRegion(
-                        start=min(w.start for w in covered),
-                        end=max(w.end for w in covered),
-                    )
-                )
+        if words:
+            regions.extend(_token_fillers_for_words(words, tokenizer))
     regions.sort(key=lambda r: (r.start, r.end))
     return regions
 
 
-def decode_audio_mono(audio_path: str) -> tuple[np.ndarray, int]:
+def decode_audio_mono(audio_path: str) -> tuple[NDArray[np.float32], int]:
     """Decode any supported audio file to mono float32 at 16 kHz (PyAV)."""
     try:
         import av
@@ -137,10 +148,14 @@ def decode_audio_mono(audio_path: str) -> tuple[np.ndarray, int]:
     if stream is None:
         raise RuntimeError(f"no audio stream found: {audio_path}")
     resampler = av.AudioResampler(format="fltp", layout="mono", rate=TARGET_SAMPLE_RATE)
-    chunks: list[np.ndarray] = []
+    chunks: list[NDArray[Any]] = []  # PyAVのto_ndarrayはdtypeが緩い
     for frame in container.decode(stream):
-        for resampled in resampler.resample(frame):
-            chunks.append(resampled.to_ndarray().reshape(-1))
+        if not isinstance(frame, av.AudioFrame):
+            continue
+        chunks.extend(
+            resampled.to_ndarray().reshape(-1)
+            for resampled in resampler.resample(frame)
+        )
     container.close()
     if not chunks:
         return np.zeros(0, dtype=np.float32), TARGET_SAMPLE_RATE
@@ -151,7 +166,15 @@ def decode_audio_mono(audio_path: str) -> tuple[np.ndarray, int]:
     return samples, TARGET_SAMPLE_RATE
 
 
-def _frame_features(samples: np.ndarray, sample_rate: int):
+def _frame_features(
+    samples: NDArray[np.float32], sample_rate: int
+) -> tuple[
+    NDArray[np.float32],
+    NDArray[np.float32],
+    NDArray[np.float32],
+    NDArray[np.float32],
+    float,
+]:
     """Per-frame RMS, spectral flux, F0 and voicing peak (chunked)."""
     frame_len = int(_FRAME_SECONDS * sample_rate)
     hop = int(_HOP_SECONDS * sample_rate)
@@ -165,7 +188,7 @@ def _frame_features(samples: np.ndarray, sample_rate: int):
     window = np.hanning(frame_len).astype(np.float32)
     min_lag, max_lag = int(sample_rate / 400), int(sample_rate / 60)
     lags = np.arange(min_lag, max_lag)
-    prev_logspec: np.ndarray | None = None
+    prev_logspec: NDArray[np.float32] | None = None
     for start_f in range(0, n_frames, _CHUNK_FRAMES):
         end_f = min(start_f + _CHUNK_FRAMES, n_frames)
         index = np.arange(start_f, end_f)
@@ -194,21 +217,10 @@ def _frame_features(samples: np.ndarray, sample_rate: int):
     return rms, flux, f0, peak, hop / sample_rate
 
 
-def detect_candidates(samples: np.ndarray, sample_rate: int) -> list[FillerRegion]:
-    """Find short, steady, pause-bounded vocalizations in mono samples."""
-    if samples.ndim > 1:
-        samples = samples[:, 0]
-    rms, flux, f0, peak, hop_s = _frame_features(samples, sample_rate)
-    n_frames = len(rms)
-    if n_frames == 0:
-        return []
-    voiced = peak > _VOICING_PEAK
-    threshold = float(np.percentile(rms, 25)) * 1.6
-    active = rms > threshold
-    voiced_flux_median = float(np.median(flux[voiced])) if voiced.any() else 0.0
-    gap_frames = max(1, int(_MIN_PAUSE_SECONDS / hop_s))
-
+def _find_islands(active: NDArray[np.bool_], gap_frames: int) -> list[tuple[int, int]]:
+    """Maximal active runs, bridging inactive gaps shorter than gap_frames."""
     islands: list[tuple[int, int]] = []
+    n_frames = len(active)
     index = 0
     while index < n_frames:
         if not active[index]:
@@ -229,24 +241,64 @@ def detect_candidates(samples: np.ndarray, sample_rate: int) -> list[FillerRegio
                 break
         islands.append((index, last))
         index = last + 1
+    return islands
+
+
+def _island_region(
+    start_f: int,
+    end_f: int,
+    *,
+    voiced: NDArray[np.bool_],
+    f0: NDArray[np.float32],
+    flux: NDArray[np.float32],
+    hop_s: float,
+    voiced_flux_median: float,
+) -> FillerRegion | None:
+    """The region for one island if it looks like a filler, else None."""
+    duration = (end_f - start_f + 1) * hop_s
+    if not (_MIN_ISLAND_SECONDS <= duration <= _MAX_ISLAND_SECONDS):
+        return None
+    island_voiced = voiced[start_f : end_f + 1]
+    if island_voiced.mean() < _MIN_VOICED_FRACTION:
+        return None
+    island_f0 = f0[start_f : end_f + 1][island_voiced]
+    if len(island_f0) < _MIN_F0_FRAMES:
+        return None
+    f0_cv = float(island_f0.std() / max(island_f0.mean(), 1e-6))
+    median_flux = float(np.median(flux[start_f : end_f + 1]))
+    if f0_cv <= _MAX_F0_CV and median_flux <= voiced_flux_median:
+        return FillerRegion(start_f * hop_s, (end_f + 1) * hop_s)
+    return None
+
+
+def detect_candidates(
+    samples: NDArray[np.float32], sample_rate: int
+) -> list[FillerRegion]:
+    """Find short, steady, pause-bounded vocalizations in mono samples."""
+    if samples.ndim > 1:
+        samples = samples[:, 0]
+    rms, flux, f0, peak, hop_s = _frame_features(samples, sample_rate)
+    if len(rms) == 0:
+        return []
+    voiced = peak > _VOICING_PEAK
+    threshold = float(np.percentile(rms, 25)) * 1.6
+    active = rms > threshold
+    voiced_flux_median = float(np.median(flux[voiced])) if voiced.any() else 0.0
+    gap_frames = max(1, int(_MIN_PAUSE_SECONDS / hop_s))
 
     regions: list[FillerRegion] = []
-    for start_f, end_f in islands:
-        duration = (end_f - start_f + 1) * hop_s
-        if not (_MIN_ISLAND_SECONDS <= duration <= _MAX_ISLAND_SECONDS):
-            continue
-        island_voiced = voiced[start_f : end_f + 1]
-        if island_voiced.mean() < _MIN_VOICED_FRACTION:
-            continue
-        island_f0 = f0[start_f : end_f + 1][island_voiced]
-        if len(island_f0) < 4:
-            continue
-        f0_cv = float(island_f0.std() / max(island_f0.mean(), 1e-6))
-        median_flux = float(np.median(flux[start_f : end_f + 1]))
-        if f0_cv <= _MAX_F0_CV and median_flux <= voiced_flux_median:
-            regions.append(
-                FillerRegion(start_f * hop_s, (end_f + 1) * hop_s)
-            )
+    for start_f, end_f in _find_islands(active, gap_frames):
+        region = _island_region(
+            start_f,
+            end_f,
+            voiced=voiced,
+            f0=f0,
+            flux=flux,
+            hop_s=hop_s,
+            voiced_flux_median=voiced_flux_median,
+        )
+        if region is not None:
+            regions.append(region)
     return regions
 
 

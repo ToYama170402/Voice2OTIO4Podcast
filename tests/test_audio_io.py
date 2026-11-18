@@ -9,7 +9,9 @@ from podcastpreprocessor.audio_io import prepare_audio
 SR = 44100
 
 
-def _write_wav(path: Path, samplerate: int, channels: int, seconds: float = 1.2) -> None:
+def _write_wav(
+    path: Path, samplerate: int, channels: int, seconds: float = 1.2
+) -> None:
     t = np.arange(int(seconds * samplerate)) / samplerate
     tone = 0.4 * np.sin(2 * np.pi * 220 * t)
     data = np.stack([tone] * channels, axis=1) if channels > 1 else tone

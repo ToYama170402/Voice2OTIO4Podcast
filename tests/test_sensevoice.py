@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -265,12 +265,14 @@ def test_sensevoice_resumes_from_chunk_cache_after_crash(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import sys as _sys
-    from types import ModuleType as _MT, SimpleNamespace as _SN
+    from types import ModuleType, SimpleNamespace
 
-    result = _SN(text="こんにちは", tokens=["こ"], timestamps=[0.0], durations=[0.1])
+    result = SimpleNamespace(
+        text="こんにちは", tokens=["こ"], timestamps=[0.0], durations=[0.1]
+    )
     state = {"calls": 0, "fail_after": 2}
-    sherpa_onnx = _MT("sherpa_onnx")
-    soundfile = _MT("soundfile")
+    sherpa_onnx = ModuleType("sherpa_onnx")
+    soundfile = ModuleType("soundfile")
 
     class FakeStream:
         def __init__(self) -> None:

@@ -1,7 +1,7 @@
-from io import BytesIO
-from pathlib import Path
 import tarfile
 from dataclasses import replace
+from io import BytesIO
+from pathlib import Path
 
 import pytest
 

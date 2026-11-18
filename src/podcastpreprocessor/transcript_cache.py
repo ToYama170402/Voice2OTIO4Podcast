@@ -14,11 +14,13 @@ best-effort: any read or validation problem is treated as a miss, never
 as an error.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+import contextlib
 import hashlib
 import json
 import os
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from .models import RawSegment, WordTimestamp
 from .transcriber import (
@@ -71,7 +73,7 @@ def _segment_to_dict(segment: RawSegment) -> dict[str, object]:
     }
 
 
-def _segment_from_dict(item: Mapping[str, object], source_id: str) -> RawSegment:
+def _segment_from_dict(item: Mapping[str, Any], source_id: str) -> RawSegment:
     words = [
         WordTimestamp(
             word=str(word["word"]),
@@ -79,7 +81,7 @@ def _segment_from_dict(item: Mapping[str, object], source_id: str) -> RawSegment
             end=float(word["end"]),
             probability=float(word["probability"]),
         )
-        for word in item["words"]  # type: ignore[attr-defined]
+        for word in item["words"]
     ]
     return RawSegment(
         id=int(item["id"]),
@@ -121,10 +123,8 @@ def save_cached(
         }
         target = cache_dir / f"{key}.json"
         temporary = cache_dir / f"{key}.json.tmp"
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
-        os.replace(temporary, target)
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(target)
     except OSError:
         # A cache that cannot be written only costs a re-transcription.
         pass
@@ -181,6 +181,18 @@ def transcribe_sources_cached(
     return results
 
 
+def _parse_journal_line(line: str) -> tuple[int, RawSegment | None] | None:
+    """Parse one chunk-journal line; None means the line is unusable."""
+    try:
+        item = json.loads(line)
+        segment = item["segment"]
+        return int(item["chunk"]), (
+            _segment_from_dict(segment, "source_1") if segment is not None else None
+        )
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 class ChunkCache:
     """Append-only journal of finished chunks for one transcription.
 
@@ -199,16 +211,9 @@ class ChunkCache:
         except OSError:
             return entries
         for line in lines:
-            try:
-                item = json.loads(line)
-                segment = item["segment"]
-                entries[int(item["chunk"])] = (
-                    _segment_from_dict(segment, "source_1")
-                    if segment is not None
-                    else None
-                )
-            except (ValueError, KeyError, TypeError, AttributeError):
-                continue
+            parsed = _parse_journal_line(line)
+            if parsed is not None:
+                entries[parsed[0]] = parsed[1]
         return entries
 
     def store(self, index: int, segment: RawSegment | None) -> None:
@@ -229,7 +234,5 @@ class ChunkCache:
             pass
 
     def clear(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._path.unlink()
-        except OSError:
-            pass

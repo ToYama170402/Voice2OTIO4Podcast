@@ -14,13 +14,15 @@ from .models import (
     seconds_to_frame,
     seconds_to_frame_range,
 )
-from .restart_detector import RestartRegion, token_restart_regions
 from .otio import write_otio
+from .restart_detector import RestartRegion, token_restart_regions
 from .segmentator import segment_source
 from .srt import write_srt
 
 _FILLER_MARKER_NAME = "フィラー候補"
 _MIN_MARKER_SECONDS = 0.08
+_RESTART_EDGE_TOLERANCE_S = 0.2
+_TIME_EPSILON_S = 0.05
 
 
 def _clip_markers(
@@ -79,8 +81,9 @@ def _restart_pieces(
     if evaluation.is_cut_candidate:
         best = max(
             overlapping,
-            key=lambda region: min(region.end, refined.end)
-            - max(region.start, refined.start),
+            key=lambda region: (
+                min(region.end, refined.end) - max(region.start, refined.start)
+            ),
         )
         merged = Evaluation(True, (*evaluation.reasons, best.reason))
         return [(refined.start, refined.end, refined.text, merged)]
@@ -90,17 +93,23 @@ def _restart_pieces(
         region
         for region in overlapping
         if not (
-            region.start <= refined.start + 0.05
-            and region.end >= refined.end - 0.05
+            region.start <= refined.start + _TIME_EPSILON_S
+            and region.end >= refined.end - _TIME_EPSILON_S
         )
     ]
     if not inside:
         return whole
     region = inside[0]
     attempt_start = (
-        refined.start if region.start - refined.start < 0.2 else region.start
+        refined.start
+        if region.start - refined.start < _RESTART_EDGE_TOLERANCE_S
+        else region.start
     )
-    attempt_end = refined.end if refined.end - region.end < 0.2 else region.end
+    attempt_end = (
+        refined.end
+        if refined.end - region.end < _RESTART_EDGE_TOLERANCE_S
+        else region.end
+    )
 
     def piece_text(start: float, end: float) -> str:
         return "".join(
@@ -187,7 +196,7 @@ def process_sources(
                 for region in token_regions
                 if not any(
                     min(region.end, other.end) - max(region.start, other.start)
-                    > 0.05
+                    > _TIME_EPSILON_S
                     for other in regions
                 )
             ]

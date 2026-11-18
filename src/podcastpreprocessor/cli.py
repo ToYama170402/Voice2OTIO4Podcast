@@ -1,15 +1,15 @@
 """Command-line interface for PodcastPreprocessor."""
 
 import argparse
-import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from .models import AudioSource, seconds_to_frame
-from .pipeline import process_sources
 from .factory import build_transcriber
-from .filler_detector import detect_filler_candidates
+from .filler_detector import FillerRegion, detect_filler_candidates
+from .models import AudioSource, RawSegment, seconds_to_frame
+from .pipeline import process_sources
 from .progress import ProgressReporter
+from .transcriber import Transcriber
 from .transcript_cache import default_cache_dir, transcribe_sources_cached
 
 
@@ -45,7 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "audio",
         nargs="+",
-        help="入力音声ファイル（話者ごとに1ファイル。指定順に source_1, source_2, ... になります）",
+        help="入力音声ファイル（話者ごとに1ファイル。指定順に "
+        "source_1, source_2, ... になります）",
     )
     parser.add_argument("output", help="出力するOTIOファイルのパス")
 
@@ -58,7 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     common.add_argument(
         "--srt-output",
-        help="字幕SRTの出力先（既定: 出力OTIOと同じ場所・同じ名前で拡張子を .srt にしたもの）",
+        help="字幕SRTの出力先（既定: 出力OTIOと同じ場所・"
+        "同じ名前で拡張子を .srt にしたもの）",
     )
     common.add_argument(
         "--fps", type=int, default=30, help="タイムラインのフレームレート（既定: 30）"
@@ -79,7 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     whisper.add_argument(
         "--model",
         default="small",
-        help="Whisperモデルサイズ（tiny / base / small / medium / large-v3 / turbo など。既定: small）",
+        help="Whisperモデルサイズ（tiny / base / small / medium / "
+        "large-v3 / turbo など。既定: small）",
     )
     whisper.add_argument(
         "--device",
@@ -89,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     whisper.add_argument(
         "--compute-type",
         default="default",
-        help="計算型（default / int8 / float16 など。CPUでは int8 が軽量です。既定: default）",
+        help="計算型（default / int8 / float16 など。"
+        "CPUでは int8 が軽量です。既定: default）",
     )
     whisper.add_argument(
         "--cpu-threads",
@@ -108,7 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--sensevoice-quantization",
         choices=("none", "int8", "int4"),
         default="int8",
-        help="ONNXモデルの量子化（既定: int8。int4 は公式配布モデルが登録されている場合のみ）",
+        help="ONNXモデルの量子化（既定: int8。"
+        "int4 は公式配布モデルが登録されている場合のみ）",
     )
     sensevoice.add_argument(
         "--sensevoice-cache-dir",
@@ -116,7 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sensevoice.add_argument(
         "--sensevoice-audio-cache-dir",
-        help="16kHzモノラルWAVへの変換キャッシュ先（既定: ~/.cache/podcastpreprocessor/converted）",
+        help="16kHzモノラルWAVへの変換キャッシュ先"
+        "（既定: ~/.cache/podcastpreprocessor/converted）",
     )
     sensevoice.add_argument(
         "--sensevoice-num-threads",
@@ -134,7 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--sensevoice-chunk-duration-s",
         type=float,
         default=30.0,
-        help="文字起こしを進めるチャンクの長さ（秒、既定: 30）。途中経過はこの単位で保存され、再実行時に再開できます",
+        help="文字起こしを進めるチャンクの長さ（秒、既定: 30）。"
+        "途中経過はこの単位で保存され、再実行時に再開できます",
     )
     sensevoice.add_argument(
         "--batch-size-s",
@@ -149,7 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-itn",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="逆テキスト正規化（ITN: 数字・日付などの表記変換）を使う（既定: 有効。無効化は --no-use-itn）",
+        help="逆テキスト正規化（ITN: 数字・日付などの表記変換）を使う"
+        "（既定: 有効。無効化は --no-use-itn）",
     )
     sensevoice.add_argument(
         "--offline",
@@ -157,11 +165,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="モデルをダウンロードせず、キャッシュ済みのモデルだけで実行する",
     )
 
-    vad = parser.add_argument_group("SenseVoice VAD のオプション（--sensevoice-vad 指定時）")
+    vad = parser.add_argument_group(
+        "SenseVoice VAD のオプション（--sensevoice-vad 指定時）"
+    )
     vad.add_argument(
         "--sensevoice-vad",
         action="store_true",
-        help="Silero VADで発話区間だけを検出して推論する（無音が多い音声で高速化します）",
+        help="Silero VADで発話区間だけを検出して推論する"
+        "（無音が多い音声で高速化します）",
     )
     vad.add_argument(
         "--sensevoice-vad-model",
@@ -208,7 +219,8 @@ def build_parser() -> argparse.ArgumentParser:
     cache.add_argument(
         "--cache-dir",
         default=None,
-        help="文字起こしキャッシュの保存先（既定: ~/.cache/podcastpreprocessor/transcripts）",
+        help="文字起こしキャッシュの保存先"
+        "（既定: ~/.cache/podcastpreprocessor/transcripts）",
     )
     cache.add_argument(
         "--no-cache",
@@ -247,11 +259,9 @@ def main(argv: list[str] | None = None) -> int:
         }
         cache_dir = None
         if not args.no_cache:
-            cache_dir = (
-                Path(args.cache_dir) if args.cache_dir else default_cache_dir()
-            )
+            cache_dir = Path(args.cache_dir) if args.cache_dir else default_cache_dir()
 
-        def _build() -> object:
+        def _build() -> Transcriber:
             return build_transcriber(
                 args.backend,
                 args.model,
@@ -284,9 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         def _on_cache_hit(audio_path: str) -> None:
-            sys.stderr.write(
-                f"Using cached transcript: {os.path.basename(audio_path)}\n"
-            )
+            sys.stderr.write(f"Using cached transcript: {Path(audio_path).name}\n")
 
         transcribed = transcribe_sources_cached(
             _build,
@@ -299,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except RuntimeError as error:
         parser.error(str(error))
-    sources: list[tuple[AudioSource, list]] = []
+    sources: list[tuple[AudioSource, list[RawSegment]]] = []
     for track_index, (source_id, audio_path, raw_segments, duration) in enumerate(
         transcribed, start=1
     ):
@@ -316,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
         sources.append(
             (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
         )
-    filler_regions = None
+    filler_regions: dict[str, list[FillerRegion]] | None = None
     if args.acoustic_fillers:
         try:
             filler_regions = {}
@@ -325,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
                 filler_regions[source.source_id] = regions
                 sys.stderr.write(
                     f"Acoustic filler candidates in "
-                    f"{os.path.basename(source.path)}: {len(regions)}\n"
+                    f"{Path(source.path).name}: {len(regions)}\n"
                 )
         except RuntimeError as error:
             parser.error(str(error))

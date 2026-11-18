@@ -132,7 +132,9 @@ def test_process_sources_keeps_filler_markers_on_clips_only(tmp_path) -> None:
         track for track in timeline.tracks if track.kind == otio.schema.TrackKind.Audio
     )
     clip_markers = [
-        marker for clip in audio_track if isinstance(clip, otio.schema.Clip)
+        marker
+        for clip in audio_track
+        if isinstance(clip, otio.schema.Clip)
         for marker in clip.markers
     ]
     assert len(clip_markers) == 1
