@@ -1,0 +1,51 @@
+name: Mutation testing
+
+# 全ミュータントの実行には時間がかかるため、PRではなく週次＋手動で回す。
+on:
+  schedule:
+    - cron: "0 19 * * 0" # 月曜 04:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --extra dev --extra sensevoice
+      - run: uv run mutmut run
+      - name: Check mutation score
+        run: |
+          uv run mutmut export-cicd-stats
+          uv run mutmut results > mutation-results.txt
+          python - <<'PY'
+          import json
+          import os
+
+          # 実測スコア（導入時点 67.7%）を基準に下限を固定する。下げる変更はしない。
+          minimum = float(os.environ["MUTATION_MIN_SCORE"])
+          stats = json.load(open("mutants/mutmut-cicd-stats.json"))
+          killed = stats["killed"]
+          tested = killed + stats["survived"] + stats["timeout"]
+          score = 100.0 * killed / tested if tested else 0.0
+          print(f"mutation score: {score:.1f}% (killed {killed}/{tested}), minimum {minimum}%")
+          if score < minimum:
+              raise SystemExit("mutation score is below the required minimum")
+          PY
+        env:
+          MUTATION_MIN_SCORE: "65"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-results
+          path: |
+            mutants/mutmut-cicd-stats.json
+            mutation-results.txt
