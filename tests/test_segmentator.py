@@ -271,8 +271,8 @@ def test_segment_raw_without_words_fallback_details() -> None:
     assert len(segments) == 1
     segment = segments[0]
     assert segment.segment_id == "2_0"
-    # The fallback always uses track 1 and the stripped source text.
-    assert segment.track_index == 1
+    # The fallback must keep the caller's track and the stripped source text.
+    assert segment.track_index == 3
     assert segment.text == "音声なし"
     assert segment.start == 1.0
     assert segment.end == 2.0
