@@ -3,9 +3,10 @@ name = "podcastpreprocessor"
 version = "0.1.0"
 description = "Generate linked OpenTimelineIO timelines from podcast transcription"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "faster-whisper>=1.1.0",
+  "numpy>=1.24",
   "onnxruntime>=1.14.1,<1.24",
   "opentimelineio>=0.17.0",
   "sudachipy>=0.6.8",
@@ -13,7 +14,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "mutmut>=3.2",
+  "hypothesis>=6.100",
+]
 sensevoice = ["av>=14", "numpy>=1.24", "sherpa-onnx>=2.0.1", "soundfile>=0.12.1"]
 
 [project.scripts]
@@ -25,3 +33,106 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=podcastpreprocessor --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["podcastpreprocessor"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# 現状の実測値（ブランチ込み）に合わせて固定する。下げる変更はしない。
+fail_under = 80
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", # pycodestyle errors
+  "W", # pycodestyle warnings
+  "F", # pyflakes
+  "I", # isort
+  "N", # pep8-naming
+  "UP", # pyupgrade
+  "B", # flake8-bugbear
+  "A", # flake8-builtins
+  "C4", # flake8-comprehensions
+  "DTZ", # flake8-datetimez
+  "FA", # flake8-future-annotations
+  "ISC", # flake8-implicit-str-concat
+  "ICN", # flake8-import-conventions
+  "G", # flake8-logging-format
+  "INP", # flake8-no-pep420
+  "PIE", # flake8-pie
+  "Q", # flake8-quotes
+  "RET", # flake8-return
+  "SIM", # flake8-simplify
+  "PTH", # flake8-use-pathlib
+  "PERF", # perflint
+  "RUF", # ruff-specific
+  "PT", # flake8-pytest-style
+  "S", # flake8-bandit
+  "BLE", # flake8-blind-except
+  "PLR0911", # too-many-return-statements
+  "PLR0912", # too-many-branches
+  "PLR0915", # too-many-statements
+  "PLR2004", # magic-value-comparison
+]
+ignore = [
+  "COM812", # ruff format と競合するため（ruff公式の推奨）
+  "ISC001", # ruff format と競合するため（ruff公式の推奨）
+  "ISC002", # ruff format と競合するため（ruff公式の推奨）
+  "RUF001", # 日本語の句読点などを曖昧文字として扱う規則であり、日本語文字列を扱うこのプロジェクトには合わない
+  "RUF002", # 同上（docstring向け）
+  "RUF003", # 同上（コメント向け）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101", # テストのアサートは assert で書く
+  "PLR2004", # テストの期待値リテラルは自然な書き方を優先する
+]
+"main.py" = ["INP001"] # 実行用シムでありパッケージではない
+
+[tool.mutmut]
+# 対象は純粋なロジック中心のモジュール。I/Oや外部ライブラリの薄い
+# ラッパー（cli / otio / sensevoice / model_manager / audio_io）は
+# ミューテーションより通常のテストで担保する。
+source_paths = ["src/podcastpreprocessor"]
+only_mutate = [
+  "src/podcastpreprocessor/models.py",
+  "src/podcastpreprocessor/segmentator.py",
+  "src/podcastpreprocessor/evaluator.py",
+  "src/podcastpreprocessor/restart_detector.py",
+  "src/podcastpreprocessor/filler_detector.py",
+  "src/podcastpreprocessor/transcript_cache.py",
+  "src/podcastpreprocessor/srt.py",
+  "src/podcastpreprocessor/progress.py",
+  "src/podcastpreprocessor/vad.py",
+]
+pytest_add_cli_args_test_selection = ["tests/"]
+pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider", "-q"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+# 型情報を持たないライブラリは Any として扱う（呼び出し側の型検査は維持する）
+[[tool.mypy.overrides]]
+module = [
+  "sudachipy",
+  "sudachipy.*",
+  "soundfile",
+  "faster_whisper",
+  "faster_whisper.*",
+  "opentimelineio",
+  "opentimelineio.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

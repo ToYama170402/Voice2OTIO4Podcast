@@ -23,14 +23,14 @@ def test_seconds_to_frame_range_rejects_ranges_lost_to_rounding() -> None:
 def test_models_reject_invalid_ranges() -> None:
     WordTimestamp("zero duration", 1.0, 1.0, 0.9)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="word timestamp must satisfy"):
         WordTimestamp("reversed", 2.0, 1.0, 0.9)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="segment must satisfy"):
         RawSegment(1, 2.0, 1.0, "bad", 0.0)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="segment must satisfy"):
         RawSegment(1, float("nan"), 1.0, "bad", 0.0)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="timeline frames must satisfy"):
         ProcessedSegment("s1", 1, 30, 30, 30, 31, "text")

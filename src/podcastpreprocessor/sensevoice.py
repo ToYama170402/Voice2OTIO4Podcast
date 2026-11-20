@@ -1,13 +1,13 @@
 """sherpa-onnx SenseVoiceSmall transcription adapter."""
 
-from importlib import import_module
 import math
-from pathlib import Path
 import re
+from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .audio_io import prepare_audio
+from .audio_io import TARGET_SAMPLE_RATE, prepare_audio
 from .model_manager import SenseVoiceModelManager
 from .models import RawSegment, WordTimestamp
 from .transcriber import PhaseCallback, ProgressCallback, TranscriptionResult
@@ -78,7 +78,8 @@ class SenseVoiceTranscriber:
         except (MemoryError, RuntimeError) as error:
             raise RuntimeError(
                 "SenseVoiceSmallのONNXモデルを読み込めませんでした。"
-                " --sensevoice-quantization int8 と --sensevoice-num-threads を確認してください。"
+                " --sensevoice-quantization int8 と "
+                "--sensevoice-num-threads を確認してください。"
             ) from error
         self._soundfile = soundfile
         self._numpy = numpy
@@ -144,87 +145,33 @@ class SenseVoiceTranscriber:
         if len(audio) == 0 or sample_rate <= 0:
             raise RuntimeError(f"audio contains no samples: {audio_path}")
         audio = self._to_mono_16khz(audio, sample_rate)
-        sample_rate = 16000
+        sample_rate = TARGET_SAMPLE_RATE
         duration = len(audio) / sample_rate
         chunk_samples = max(1, round(self._chunk_duration_s * sample_rate))
-        segments: list[RawSegment] = []
-        if self._vad:
-            if phase_callback is not None:
-                phase_callback(audio_path, "音声区間の検出")
-            regions = _detect_sherpa_speech_regions(
-                self._sherpa_onnx,
-                audio,
-                sample_rate,
-                str(self._vad_model_path),
-                threshold=self._vad_threshold,
-                min_silence_duration=self._vad_min_silence_duration,
-                min_speech_duration=self._vad_min_speech_duration,
-                max_speech_duration=self._vad_max_speech_duration,
-                padding_s=self._vad_padding_s,
-                provider=self._provider,
-                num_threads=self._num_threads,
-            )
-        else:
-            regions = [(0, len(audio))]
+        regions = self._speech_regions(audio, sample_rate, audio_path, phase_callback)
         if not regions:
             raise RuntimeError(f"VAD detected no speech: {audio_path}")
         # Build the full chunk plan first: chunk indices are the chunk
         # cache keys, so they must be stable across runs.
-        plan: list[tuple[int, int]] = []
-        for region_start, region_end in regions:
-            if self._vad:
-                plan.append((region_start, region_end))
-            else:
-                plan.extend(
-                    (chunk_start, min(chunk_start + chunk_samples, region_end))
-                    for chunk_start in range(region_start, region_end, chunk_samples)
-                )
-        chunk_cache: ChunkCache | None = None
-        cached_chunks: dict[int, RawSegment | None] = {}
-        if self._transcript_cache_dir is not None:
-            try:
-                key = cache_key(audio_path, self._chunk_settings())
-                chunk_cache = ChunkCache(
-                    Path(self._transcript_cache_dir) / "partials" / f"{key}.jsonl"
-                )
-                cached_chunks = chunk_cache.load()
-            except OSError:
-                chunk_cache = None
+        plan = self._chunk_plan(regions, chunk_samples)
+        chunk_cache, cached_chunks = self._open_chunk_cache(audio_path)
+        segments: list[RawSegment] = []
         if progress_callback is not None:
             progress_callback(audio_path, 0.0, duration)
         for chunk_index, (chunk_start, chunk_end) in enumerate(plan):
             offset = chunk_start / sample_rate
             chunk_duration = (chunk_end - chunk_start) / sample_rate
-            segment: RawSegment | None
-            if chunk_index in cached_chunks:
-                segment = cached_chunks[chunk_index]
-                if segment is not None:
-                    segment.source_id = source_id
-            else:
-                stream = self._recognizer.create_stream()
-                stream.accept_waveform(sample_rate, audio[chunk_start:chunk_end])
-                try:
-                    self._recognizer.decode_stream(stream)
-                except Exception as error:
-                    raise RuntimeError(
-                        "SenseVoiceSmallの推論に失敗しました。"
-                        f" 音声の {offset:.1f}-{offset + chunk_duration:.1f} 秒区間です。"
-                        " --sensevoice-chunk-duration-s を短くして再試行してください。"
-                    ) from error
-                result = stream.result
-                segment = (
-                    _to_raw_segment(
-                        result,
-                        source_id,
-                        offset,
-                        offset + chunk_duration,
-                        len(segments),
-                    )
-                    if str(_value(result, "text", "")).strip()
-                    else None
-                )
-                if chunk_cache is not None:
-                    chunk_cache.store(chunk_index, segment)
+            segment = self._chunk_segment(
+                chunk_index,
+                chunk_start,
+                chunk_end,
+                audio=audio,
+                sample_rate=sample_rate,
+                source_id=source_id,
+                segment_index=len(segments),
+                chunk_cache=chunk_cache,
+                cached_chunks=cached_chunks,
+            )
             if segment is not None:
                 segments.append(segment)
             if progress_callback is not None:
@@ -234,6 +181,105 @@ class SenseVoiceTranscriber:
         if chunk_cache is not None:
             chunk_cache.clear()
         return segments, duration
+
+    def _speech_regions(
+        self,
+        audio: Any,
+        sample_rate: int,
+        audio_path: str,
+        phase_callback: PhaseCallback | None,
+    ) -> list[tuple[int, int]]:
+        if not self._vad:
+            return [(0, len(audio))]
+        if phase_callback is not None:
+            phase_callback(audio_path, "音声区間の検出")
+        return _detect_sherpa_speech_regions(
+            self._sherpa_onnx,
+            audio,
+            sample_rate,
+            str(self._vad_model_path),
+            threshold=self._vad_threshold,
+            min_silence_duration=self._vad_min_silence_duration,
+            min_speech_duration=self._vad_min_speech_duration,
+            max_speech_duration=self._vad_max_speech_duration,
+            padding_s=self._vad_padding_s,
+            provider=self._provider,
+            num_threads=self._num_threads,
+        )
+
+    def _chunk_plan(
+        self, regions: list[tuple[int, int]], chunk_samples: int
+    ) -> list[tuple[int, int]]:
+        plan: list[tuple[int, int]] = []
+        for region_start, region_end in regions:
+            if self._vad:
+                plan.append((region_start, region_end))
+            else:
+                plan.extend(
+                    (chunk_start, min(chunk_start + chunk_samples, region_end))
+                    for chunk_start in range(region_start, region_end, chunk_samples)
+                )
+        return plan
+
+    def _open_chunk_cache(
+        self, audio_path: str
+    ) -> tuple[ChunkCache | None, dict[int, RawSegment | None]]:
+        if self._transcript_cache_dir is None:
+            return None, {}
+        try:
+            key = cache_key(audio_path, self._chunk_settings())
+            chunk_cache = ChunkCache(
+                Path(self._transcript_cache_dir) / "partials" / f"{key}.jsonl"
+            )
+            return chunk_cache, chunk_cache.load()
+        except OSError:
+            return None, {}
+
+    def _chunk_segment(
+        self,
+        chunk_index: int,
+        chunk_start: int,
+        chunk_end: int,
+        *,
+        audio: Any,
+        sample_rate: int,
+        source_id: str,
+        segment_index: int,
+        chunk_cache: ChunkCache | None,
+        cached_chunks: dict[int, RawSegment | None],
+    ) -> RawSegment | None:
+        if chunk_index in cached_chunks:
+            segment = cached_chunks[chunk_index]
+            if segment is not None:
+                segment.source_id = source_id
+            return segment
+        offset = chunk_start / sample_rate
+        chunk_duration = (chunk_end - chunk_start) / sample_rate
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(sample_rate, audio[chunk_start:chunk_end])
+        try:
+            self._recognizer.decode_stream(stream)
+        except Exception as error:
+            raise RuntimeError(
+                "SenseVoiceSmallの推論に失敗しました。"
+                f" 音声の {offset:.1f}-{offset + chunk_duration:.1f} 秒区間です。"
+                " --sensevoice-chunk-duration-s を短くして再試行してください。"
+            ) from error
+        result = stream.result
+        segment = (
+            _to_raw_segment(
+                result,
+                source_id,
+                offset,
+                offset + chunk_duration,
+                segment_index,
+            )
+            if str(_value(result, "text", "")).strip()
+            else None
+        )
+        if chunk_cache is not None:
+            chunk_cache.store(chunk_index, segment)
+        return segment
 
     def _chunk_settings(self) -> dict[str, object]:
         """Settings that determine chunk boundaries and chunk content."""
@@ -253,11 +299,13 @@ class SenseVoiceTranscriber:
 
     def _to_mono_16khz(self, audio: Any, sample_rate: int) -> Any:
         mono = audio[:, 0]
-        if sample_rate == 16000:
+        if sample_rate == TARGET_SAMPLE_RATE:
             return mono
-        target_length = round(len(mono) * 16000 / sample_rate)
+        target_length = round(len(mono) * TARGET_SAMPLE_RATE / sample_rate)
         source_positions = self._numpy.arange(len(mono))
-        target_positions = self._numpy.arange(target_length) * sample_rate / 16000
+        target_positions = (
+            self._numpy.arange(target_length) * sample_rate / TARGET_SAMPLE_RATE
+        )
         return self._numpy.interp(target_positions, source_positions, mono).astype(
             "float32"
         )
@@ -341,7 +389,7 @@ def _detect_sherpa_speech_regions(
         buffer_size_in_seconds=max(30.0, max_speech_duration + 1.0),
     )
     window_size = config.silero_vad.window_size
-    segments: list[object] = []
+    segments: list[Any] = []
     for start in range(0, len(audio), window_size):
         vad.accept_waveform(audio[start : start + window_size])
         while not vad.empty():
@@ -396,7 +444,7 @@ def _detect_speech_regions(
     active_frames = [value >= threshold for value in rms_values]
     regions: list[tuple[int, int]] = []
     start_frame: int | None = None
-    for index, active in enumerate(active_frames + [False]):
+    for index, active in enumerate([*active_frames, False]):
         if active and start_frame is None:
             start_frame = index
         elif not active and start_frame is not None:

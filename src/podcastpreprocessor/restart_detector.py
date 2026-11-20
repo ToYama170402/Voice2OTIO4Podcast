@@ -19,9 +19,9 @@ sentences are excluded, mirroring the precision-first rules the
 segment-text version used.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-import re
 
 from .evaluator import is_filler_text
 from .models import RawSegment
@@ -47,6 +47,12 @@ _EXCLUSIONS = frozenset(
 
 _SENTENCE_FINAL = frozenset("。！？!?")
 _STRIP = re.compile(r"[\s、。，．！？!?,.・…「」『』（）()]")
+
+_MIN_OUTLIER_CHARS = 3
+_LONG_TOKEN_S = 0.8
+_MIN_ATTEMPT_CHARS = 3
+_MAX_OVERLAP_S = 0.5
+_MIN_FULL_REPEAT_CHARS = 6
 
 
 @dataclass(frozen=True)
@@ -80,11 +86,13 @@ def _effective_end(chars: list[_Char]) -> float:
     is taken to end one typical token after the last token's start.
     """
     last = chars[-1]
-    if len(chars) < 3:
+    if len(chars) < _MIN_OUTLIER_CHARS:
         return last.end
     durations = sorted(char.end - char.start for char in chars[:-1])
     median = durations[len(durations) // 2]
-    if last.end - last.start > 0.8 and last.end - last.start > 2.5 * max(median, 0.01):
+    if last.end - last.start > _LONG_TOKEN_S and last.end - last.start > 2.5 * max(
+        median, 0.01
+    ):
         return last.start + median
     return last.end
 
@@ -138,11 +146,14 @@ def _build_utterances(
                 boundary = (
                     current is None
                     or segment_index != previous_segment
-                    or (previous is not None and previous.end - previous.start >= pause_token_duration)
+                    or (
+                        previous is not None
+                        and previous.end - previous.start >= pause_token_duration
+                    )
                     or (previous is not None and token.start - previous.end > pause_gap)
                     or (current is not None and current.complete and current.chars)
                 )
-                if boundary:
+                if boundary or current is None:
                     current = _Utterance()
                     utterances.append(current)
                 current.chars.append(token)
@@ -153,7 +164,7 @@ def _build_utterances(
 
 def _common_prefix_length(a: str, b: str) -> int:
     length = 0
-    for char_a, char_b in zip(a, b):
+    for char_a, char_b in zip(a, b, strict=False):
         if char_a != char_b:
             break
         length += 1
@@ -206,14 +217,14 @@ def _pair_region(
     """Region of an utterance whose opening the next utterance re-speaks."""
     core = attempt.text
     if (
-        len(core) < 3
+        len(core) < _MIN_ATTEMPT_CHARS
         or core in _EXCLUSIONS
         or _is_repeated_exclusion(core)
         or is_filler_text(core)
     ):
         return None
     gap = following.start - attempt.end
-    if gap < -0.5 or gap > max_gap:
+    if gap < -_MAX_OVERLAP_S or gap > max_gap:
         return None
     if attempt.end - attempt.start > max_attempt_duration:
         return None
@@ -221,15 +232,17 @@ def _pair_region(
     if prefix == 0:
         return None
     full = prefix == len(core)
-    if full and len(core) >= min_prefix and (not attempt.complete or len(core) >= 6):
-        flagged = True
-    elif full and not attempt.complete:
-        flagged = True
-    elif (
+    full_repeat = (
+        full
+        and len(core) >= min_prefix
+        and (not attempt.complete or len(core) >= _MIN_FULL_REPEAT_CHARS)
+    )
+    partial_repeat = (
         not attempt.complete
         and prefix >= min_prefix
         and prefix >= min_coverage * len(core)
-    ):
+    )
+    if full_repeat or (full and not attempt.complete) or partial_repeat:
         flagged = True
     else:
         flagged = False

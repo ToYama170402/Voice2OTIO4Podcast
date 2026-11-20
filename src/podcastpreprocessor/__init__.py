@@ -11,8 +11,8 @@ from .models import (
 )
 
 __all__ = [
-    "AudioSource",
     "AudioSlice",
+    "AudioSource",
     "ProcessedSegment",
     "RawSegment",
     "RefinedSegment",

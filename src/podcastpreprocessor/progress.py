@@ -17,7 +17,7 @@ TTY. The mapping itself is pure arithmetic so it can be unit tested
 without a terminal.
 """
 
-import os
+from pathlib import Path
 from typing import TextIO
 
 PHASE_TRANSCRIBE = "文字起こし"
@@ -78,20 +78,14 @@ class ProgressReporter:
         self._phase_label = phase_label
         self._set(self.ratio_for(self._file_index, "prepare", 0.0))
 
-    def __call__(
-        self, audio_path: str, elapsed: float, duration: float | None
-    ) -> None:
+    def __call__(self, audio_path: str, elapsed: float, duration: float | None) -> None:
         """Transcription progress callback (elapsed/duration in seconds)."""
         self._advance_file(audio_path)
         self._phase_label = PHASE_TRANSCRIBE
         if duration is None or duration <= 0:
             self._render()
             return
-        self._set(
-            self.ratio_for(
-                self._file_index, "transcribe", elapsed / duration
-            )
-        )
+        self._set(self.ratio_for(self._file_index, "transcribe", elapsed / duration))
 
     def start_processing(self) -> None:
         """Report the final timeline-generation phase."""
@@ -112,9 +106,7 @@ class ProgressReporter:
             self._current_path = audio_path
         elif audio_path != self._current_path:
             self._current_path = audio_path
-            self._file_index = min(
-                self._file_index + 1, self._total_files - 1
-            )
+            self._file_index = min(self._file_index + 1, self._total_files - 1)
 
     def _set(self, ratio: float) -> None:
         self._ratio = max(self._ratio, min(max(ratio, 0.0), 1.0))
@@ -125,16 +117,12 @@ class ProgressReporter:
             return
         filled = int(self._ratio * _BAR_WIDTH)
         bar = "#" * filled + "-" * (_BAR_WIDTH - filled)
-        name = (
-            os.path.basename(self._current_path) if self._current_path else ""
-        )
+        name = Path(self._current_path).name if self._current_path else ""
         counter = (
             f" ({self._file_index + 1}/{self._total_files})"
             if self._total_files > 1
             else ""
         )
-        label = " ".join(
-            part for part in (self._phase_label, name + counter) if part
-        )
+        label = " ".join(part for part in (self._phase_label, name + counter) if part)
         self._stream.write(f"\r[{bar}] {self._ratio:>5.1%} {label}")
         self._stream.flush()

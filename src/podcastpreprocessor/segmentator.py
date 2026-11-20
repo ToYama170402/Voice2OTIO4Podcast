@@ -9,6 +9,7 @@ touching the surrounding speech.
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sudachipy import Dictionary, SplitMode
 
@@ -21,6 +22,8 @@ _TOKENIZER = Dictionary().tokenizer()
 
 # Morpheme categories that can head a bunsetsu. Function words (particles,
 # auxiliaries, suffixes, punctuation) always attach to the preceding unit.
+_POS_CONJUGATION_INDEX = 4
+
 _BUNSETSU_HEAD_POS = {
     "名詞",
     "代名詞",
@@ -64,7 +67,7 @@ def _text(words: Sequence[WordTimestamp]) -> str:
     return "".join(word.word for word in words).strip()
 
 
-def _is_filler_morpheme(morpheme: object) -> bool:
+def _is_filler_morpheme(morpheme: Any) -> bool:
     pos = morpheme.part_of_speech()
     if pos[0] != "感動詞":
         return False
@@ -73,7 +76,7 @@ def _is_filler_morpheme(morpheme: object) -> bool:
     )
 
 
-def _filler_char_spans(morphemes: Sequence[object]) -> list[tuple[int, int]]:
+def _filler_char_spans(morphemes: Sequence[Any]) -> list[tuple[int, int]]:
     """Character spans of filler phrases, e.g. えー + と + 、 in えーと、."""
     morphemes = list(morphemes)
     spans: list[tuple[int, int]] = []
@@ -98,7 +101,7 @@ def _filler_char_spans(morphemes: Sequence[object]) -> list[tuple[int, int]]:
     return spans
 
 
-def _is_bunsetsu_head(morpheme: object, previous: object) -> bool:
+def _is_bunsetsu_head(morpheme: Any, previous: Any) -> bool:
     pos = morpheme.part_of_speech()
     if pos[0] not in _BUNSETSU_HEAD_POS:
         return False
@@ -114,16 +117,18 @@ def _is_bunsetsu_head(morpheme: object, previous: object) -> bool:
             return False
         if previous.surface() in {"て", "で"}:
             return False
-        conjugation = pos[4] if len(pos) > 4 else ""
+        conjugation = (
+            pos[_POS_CONJUGATION_INDEX] if len(pos) > _POS_CONJUGATION_INDEX else ""
+        )
         if prev_pos[0] == "名詞" and "サ行変格" in conjugation:
             return False
     return True
 
 
-def _bunsetsu_head_offsets(morphemes: Sequence[object], text_length: int) -> set[int]:
+def _bunsetsu_head_offsets(morphemes: Sequence[Any], text_length: int) -> set[int]:
     """Character offsets at which a new bunsetsu may start."""
     heads = {0, text_length}
-    previous: object | None = None
+    previous: Any = None
     for morpheme in morphemes:
         if previous is not None and _is_bunsetsu_head(morpheme, previous):
             heads.add(morpheme.begin())
@@ -169,8 +174,7 @@ def _tokenize_chunks(
         start_offset = char_offset - len(text)
         morphemes = _TOKENIZER.tokenize(text, SplitMode.A)
         heads.update(
-            start_offset + head
-            for head in _bunsetsu_head_offsets(morphemes, len(text))
+            start_offset + head for head in _bunsetsu_head_offsets(morphemes, len(text))
         )
         filler_spans.extend(
             (start_offset + begin, start_offset + end)
@@ -212,9 +216,7 @@ def _build_units(words: Sequence[WordTimestamp]) -> list[_Unit]:
     for word in words:
         leading = len(word.word) - len(word.word.lstrip())
         trailing = len(word.word) - len(word.word.rstrip())
-        word_spans.append(
-            (cursor + leading, cursor + len(word.word) - trailing)
-        )
+        word_spans.append((cursor + leading, cursor + len(word.word) - trailing))
         cursor += len(word.word)
 
     def is_filler_word(index: int) -> bool:
@@ -315,9 +317,7 @@ def segment_raw(
     for unit in _build_units(source.words):
         if unit.is_filler:
             flush()
-            result.append(
-                _make_segment(source, len(result), unit.words, track_index)
-            )
+            result.append(_make_segment(source, len(result), unit.words, track_index))
             continue
         if current and (
             len(_text([*current, *unit.words])) > max_characters

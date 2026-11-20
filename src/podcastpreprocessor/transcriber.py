@@ -1,7 +1,7 @@
 """Transcription backend contracts and the faster-whisper adapter."""
 
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from .models import RawSegment, WordTimestamp
 
@@ -37,7 +37,8 @@ class FasterWhisperTranscriber:
             from faster_whisper import WhisperModel
         except ImportError as error:
             raise RuntimeError(
-                "faster-whisper is required for transcription; install project dependencies first"
+                "faster-whisper is required for transcription; "
+                "install project dependencies first"
             ) from error
         try:
             self._model = WhisperModel(
@@ -58,7 +59,7 @@ class FasterWhisperTranscriber:
     def transcribe(
         self, audio_path: str, source_id: str = "source_1"
     ) -> list[RawSegment]:
-        segments, info = self._model.transcribe(
+        segments, _info = self._model.transcribe(
             audio_path,
             language="ja",
             word_timestamps=True,
@@ -93,7 +94,7 @@ class FasterWhisperTranscriber:
             last_elapsed = 0.0
             for item_index, segment in enumerate(segments):
                 raw_segments.append(_to_raw_segment(item_index, segment, source_id))
-                last_elapsed = float(getattr(segment, "end"))
+                last_elapsed = float(segment.end)
                 if progress_callback is not None:
                     progress_callback(
                         audio_path,
@@ -114,12 +115,12 @@ class FasterWhisperTranscriber:
 
 
 def _to_raw_segment(
-    index: int, segment: object, source_id: str = "source_1"
+    index: int, segment: Any, source_id: str = "source_1"
 ) -> RawSegment:
     words: list[WordTimestamp] = []
     for word in getattr(segment, "words", None) or []:
-        start = float(getattr(word, "start"))
-        end = float(getattr(word, "end"))
+        start = float(word.start)
+        end = float(word.end)
         if end <= start:
             continue
         words.append(
@@ -132,8 +133,8 @@ def _to_raw_segment(
         )
     return RawSegment(
         id=index,
-        start=float(getattr(segment, "start")),
-        end=float(getattr(segment, "end")),
+        start=float(segment.start),
+        end=float(segment.end),
         text=str(getattr(segment, "text", "")),
         no_speech_prob=float(getattr(segment, "no_speech_prob", 0.0)),
         words=words,

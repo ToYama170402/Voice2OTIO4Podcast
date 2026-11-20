@@ -1,11 +1,18 @@
 """Speech-region utilities for the SenseVoice transcription adapter."""
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Protocol
+
+
+class SpeechSegment(Protocol):
+    """The parts of a sherpa-onnx VAD segment this module reads."""
+
+    start: float
+    end: float
 
 
 def speech_segments_to_regions(
-    segments: Iterable[object],
+    segments: Iterable[SpeechSegment],
     sample_rate: int,
     audio_length: int,
     padding_s: float = 0.25,
@@ -22,12 +29,12 @@ def speech_segments_to_regions(
     regions: list[tuple[int, int]] = []
     for segment in segments:
         # sherpa-onnx SpeechSegment.start is an input-sample index, not seconds.
-        start = round(float(getattr(segment, "start")))
+        start = round(float(segment.start))
         samples = getattr(segment, "samples", None)
         if samples is not None:
             end = start + len(samples)
         else:
-            end = round(float(getattr(segment, "end")) * sample_rate)
+            end = round(float(segment.end) * sample_rate)
         start = max(0, start - padding_samples)
         end = min(audio_length, end + padding_samples)
         if end <= start:

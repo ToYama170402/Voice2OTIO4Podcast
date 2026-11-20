@@ -203,7 +203,7 @@ def generate_otio(
         for audio_slice in build_audio_slices(
             segment_list, source.source_id, source.duration_frames
         ):
-            segment = next(
+            matched = next(
                 (
                     item
                     for item in source_segments
@@ -211,7 +211,7 @@ def generate_otio(
                 ),
                 None,
             )
-            link_group_id = segment.link_group_id if segment else 0
+            link_group_id = matched.link_group_id if matched else 0
             clip = _clip(
                 source.name or source.source_id,
                 audio_slice.source_in_frame,
@@ -219,14 +219,10 @@ def generate_otio(
                 fps,
                 link_group_id,
                 reference,
-                (
-                    _metadata(link_group_id)
-                    if link_group_id
-                    else {"source_slice": True}
-                ),
+                (_metadata(link_group_id) if link_group_id else {"source_slice": True}),
             )
-            if segment is not None:
-                for marker in segment.clip_markers:
+            if matched is not None:
+                for marker in matched.clip_markers:
                     marked_range = otio.opentime.TimeRange(
                         start_time=otio.opentime.RationalTime(
                             audio_slice.source_in_frame + marker.start_frame,

@@ -33,7 +33,8 @@ def test_detects_steady_island_between_pauses() -> None:
     regions = detect_candidates(samples, SR)
 
     assert len(regions) == 1
-    assert regions[0].start < 1.2 and regions[0].end > 1.3
+    assert regions[0].start < 1.2
+    assert regions[0].end > 1.3
 
 
 def test_rejects_long_steady_tone() -> None:

@@ -67,7 +67,9 @@ class _FakeTranscriber:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def transcribe_sources(self, audio_paths, progress_callback=None, phase_callback=None):
+    def transcribe_sources(
+        self, audio_paths, progress_callback=None, phase_callback=None
+    ):
         self.calls.extend(audio_paths)
         return [
             (f"source_{i}", path, [_segment()], 30.0)
@@ -114,9 +116,7 @@ def test_transcribe_sources_cached_resumes_after_failure(tmp_path: Path) -> None
 def test_transcribe_sources_cached_without_cache_dir(tmp_path: Path) -> None:
     audio = _audio(tmp_path)
     fake = _FakeTranscriber()
-    results = transcribe_sources_cached(
-        lambda: fake, [str(audio)], SETTINGS, None
-    )
+    results = transcribe_sources_cached(lambda: fake, [str(audio)], SETTINGS, None)
     assert fake.calls == [str(audio)]
     assert results[0][2][0].text == "えーと、今日は"
 
@@ -132,7 +132,9 @@ def test_chunk_cache_journals_and_tolerates_torn_line(tmp_path: Path) -> None:
 
     entries = store.load()
 
-    assert entries[0] is not None and entries[0].text == "えーと、今日は"
+    first = entries[0]
+    assert first is not None
+    assert first.text == "えーと、今日は"
     assert entries[1] is None
     assert 2 not in entries
     store.clear()

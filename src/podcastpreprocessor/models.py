@@ -1,7 +1,7 @@
 """Core data models shared by the processing stages."""
 
-from dataclasses import dataclass, field
 import math
+from dataclasses import dataclass, field
 
 
 def seconds_to_frame(seconds: float, fps: int) -> int:

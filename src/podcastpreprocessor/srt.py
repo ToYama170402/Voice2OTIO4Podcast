@@ -1,6 +1,7 @@
 """SubRip subtitle generation."""
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from .models import ProcessedSegment
 
@@ -29,7 +30,7 @@ def write_srt(
             segment.end_frame,
         ),
     )
-    with open(output_path, "w", encoding="utf-8", newline="\n") as output:
+    with Path(output_path).open("w", encoding="utf-8", newline="\n") as output:
         for index, segment in enumerate(ordered_segments, start=1):
             output.write(f"{index}\n")
             output.write(

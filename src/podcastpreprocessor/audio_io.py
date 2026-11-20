@@ -12,11 +12,12 @@ soundfile cannot read at all (such as m4a) become usable, because PyAV
 decodes them.
 """
 
+import contextlib
 import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 TARGET_SAMPLE_RATE = 16000
 
@@ -47,7 +48,7 @@ def _needs_conversion(audio_path: str, soundfile_module: Any) -> bool:
         return False
     try:
         info = info_fn(audio_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- 読めないファイルは「変換が必要」として扱う
         return True
     return not (info.samplerate == TARGET_SAMPLE_RATE and info.channels == 1)
 
@@ -93,7 +94,7 @@ def _save_journal(journal: Path, samples: int) -> None:
         temporary.write_text(
             json.dumps({"version": 1, "samples": samples}), encoding="utf-8"
         )
-        os.replace(temporary, journal)
+        temporary.replace(journal)
     except OSError:
         pass
 
@@ -103,17 +104,106 @@ def _wrap_pcm_as_wav(partial: Path, dest_path: Path, sf: Any) -> None:
     import numpy as np
 
     temporary = dest_path.with_suffix(".wav.tmp")
-    with partial.open("rb") as source, sf.SoundFile(
-        str(temporary),
-        "w",
-        samplerate=TARGET_SAMPLE_RATE,
-        channels=1,
-        subtype="PCM_16",
-        format="WAV",
-    ) as out:
+    with (
+        partial.open("rb") as source,
+        sf.SoundFile(
+            str(temporary),
+            "w",
+            samplerate=TARGET_SAMPLE_RATE,
+            channels=1,
+            subtype="PCM_16",
+            format="WAV",
+        ) as out,
+    ):
         while block := source.read(1 << 20):
             out.write(np.frombuffer(block, dtype=np.int16))
-    os.replace(temporary, dest_path)
+    temporary.replace(dest_path)
+
+
+def _audio_stream_or_raise(container: Any, audio_path: str) -> Any:
+    stream = next((s for s in container.streams if s.type == "audio"), None)
+    if stream is None:
+        container.close()
+        raise RuntimeError(f"no audio stream found: {audio_path}")
+    return stream
+
+
+def _seek_to_resume(container: Any, stream: Any, resume_time: float) -> bool:
+    """Seek near the resume point; False when the container cannot seek."""
+    try:
+        # With a stream given, seek timestamps are in that stream's
+        # time_base units (not AV_TIME_BASE microseconds).
+        seek_ts = (
+            int(resume_time / float(stream.time_base))
+            if stream.time_base
+            else int(resume_time * 1_000_000)
+        )
+        container.seek(seek_ts, stream=stream, backward=True)
+    except Exception:  # noqa: BLE001 -- seekできない場合は最初から変換し直す
+        return False
+    return True
+
+
+class _ResampleSink:
+    """Appends resampled PCM to the partial file, journaling progress.
+
+    ``written`` counts the samples safely attributable to this conversion,
+    including the ones a previous interrupted run left behind. The first
+    decoded frame fixes how many resampled samples to drop at the seam so
+    the resumed output lines up with the journal.
+    """
+
+    def __init__(self, journal: Path, written: int, resume_time: float) -> None:
+        self._journal = journal
+        self._resume_time = resume_time
+        self.written = written
+        self._since_journal = 0
+        self._skip: int | None = None
+
+    def run(self, partial: Path, container: Any, stream: Any, resampler: Any) -> None:
+        with partial.open("ab" if self.written else "wb") as out:
+            for frame in container.decode(stream):
+                self._consume_frame(out, frame, resampler)
+            self._drain(out, resampler)
+            out.flush()
+            os.fsync(out.fileno())
+
+    def _consume_frame(self, out: IO[bytes], frame: Any, resampler: Any) -> None:
+        if self._skip is None:
+            start = (
+                float(frame.pts * frame.time_base)
+                if frame.pts is not None and frame.time_base
+                else self._resume_time
+            )
+            self._skip = max(0, round((self._resume_time - start) * TARGET_SAMPLE_RATE))
+        for resampled in resampler.resample(frame):
+            self._append_resampled(out, resampled)
+
+    def _drain(self, out: IO[bytes], resampler: Any) -> None:
+        for resampled in resampler.resample(None):
+            self._append_resampled(out, resampled)
+
+    def _append_resampled(self, out: IO[bytes], resampled: Any) -> None:
+        block = resampled.to_ndarray().reshape(-1)
+        if self._skip:
+            drop = min(self._skip, len(block))
+            block = block[drop:]
+            self._skip -= drop
+        if len(block):
+            self._append(out, block)
+
+    def _append(self, out: IO[bytes], block: Any) -> None:
+        out.write(block.tobytes())
+        self.written += len(block)
+        self._since_journal += len(block)
+        # Journal (and fsync) in 30-second strides: conversion is
+        # fast, so losing up to 30 s of it on a crash is cheap, and
+        # per-second fsyncs would dominate on slow disks.
+        if self._since_journal >= TARGET_SAMPLE_RATE * 30:
+            out.flush()
+            os.fsync(out.fileno())
+            _save_journal(self._journal, self.written)
+            self._since_journal = 0
 
 
 def convert_to_wav16k(audio_path: str, dest_path: Path) -> None:
@@ -138,76 +228,19 @@ def convert_to_wav16k(audio_path: str, dest_path: Path) -> None:
     resume_time = written / TARGET_SAMPLE_RATE
 
     container = av.open(audio_path)
-    stream = next((s for s in container.streams if s.type == "audio"), None)
-    if stream is None:
+    stream = _audio_stream_or_raise(container, audio_path)
+    if written and not _seek_to_resume(container, stream, resume_time):
+        # The container cannot seek; restart the conversion cleanly.
         container.close()
-        raise RuntimeError(f"no audio stream found: {audio_path}")
-    if written:
-        try:
-            # With a stream given, seek timestamps are in that stream's
-            # time_base units (not AV_TIME_BASE microseconds).
-            seek_ts = (
-                int(resume_time / float(stream.time_base))
-                if stream.time_base
-                else int(resume_time * 1_000_000)
-            )
-            container.seek(seek_ts, stream=stream, backward=True)
-        except Exception:
-            # The container cannot seek; restart the conversion cleanly.
-            container.close()
-            container = av.open(audio_path)
-            stream = next(s for s in container.streams if s.type == "audio")
-            written = 0
-            resume_time = 0.0
-    resampler = av.AudioResampler(
-        format="s16", layout="mono", rate=TARGET_SAMPLE_RATE
-    )
-    skip: int | None = None  # resampled samples to drop at the seam
-    since_journal = 0
-    with partial.open("ab" if written else "wb") as out:
-
-        def append(block: Any) -> None:
-            nonlocal written, since_journal
-            out.write(block.tobytes())
-            written += len(block)
-            since_journal += len(block)
-            # Journal (and fsync) in 30-second strides: conversion is
-            # fast, so losing up to 30 s of it on a crash is cheap, and
-            # per-second fsyncs would dominate on slow disks.
-            if since_journal >= TARGET_SAMPLE_RATE * 30:
-                out.flush()
-                os.fsync(out.fileno())
-                _save_journal(journal, written)
-                since_journal = 0
-
-        for frame in container.decode(stream):
-            if skip is None:
-                start = (
-                    float(frame.pts * frame.time_base)
-                    if frame.pts is not None and frame.time_base
-                    else resume_time
-                )
-                skip = max(0, round((resume_time - start) * TARGET_SAMPLE_RATE))
-            for resampled in resampler.resample(frame):
-                block = resampled.to_ndarray().reshape(-1)
-                if skip:
-                    drop = min(skip, len(block))
-                    block = block[drop:]
-                    skip -= drop
-                if len(block):
-                    append(block)
-        for resampled in resampler.resample(None):
-            block = resampled.to_ndarray().reshape(-1)
-            if skip:
-                drop = min(skip, len(block))
-                block = block[drop:]
-                skip -= drop
-            if len(block):
-                append(block)
-        out.flush()
-        os.fsync(out.fileno())
+        container = av.open(audio_path)
+        stream = _audio_stream_or_raise(container, audio_path)
+        written = 0
+        resume_time = 0.0
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=TARGET_SAMPLE_RATE)
+    sink = _ResampleSink(journal, written, resume_time)
+    sink.run(partial, container, stream, resampler)
     container.close()
-    _save_journal(journal, written)
+    _save_journal(journal, sink.written)
     try:
         import soundfile as sf
     except ImportError as error:
@@ -217,10 +250,8 @@ def convert_to_wav16k(audio_path: str, dest_path: Path) -> None:
         ) from error
     _wrap_pcm_as_wav(partial, dest_path, sf)
     for path in (partial, journal):
-        try:
+        with contextlib.suppress(OSError):
             path.unlink()
-        except OSError:
-            pass
 
 
 def prepare_audio(
@@ -236,9 +267,10 @@ def prepare_audio(
     """
     if soundfile_module is None:
         try:
-            import soundfile as soundfile_module
+            import soundfile
         except ImportError:
             return audio_path
+        soundfile_module = soundfile
     if not _needs_conversion(audio_path, soundfile_module):
         return audio_path
     directory = cache_dir if cache_dir is not None else default_converted_dir()

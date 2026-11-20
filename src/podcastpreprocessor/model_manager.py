@@ -1,12 +1,14 @@
 """Download and cache official sherpa-onnx SenseVoice models."""
 
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import tarfile
+from dataclasses import dataclass
+from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import IO, cast
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 
@@ -121,9 +123,11 @@ class SenseVoiceModelManager:
         with TemporaryDirectory(prefix="vad-", dir=target_path.parent) as temp:
             temp_path = Path(temp) / spec.model_name
             try:
-                with urlopen(spec.model_url, timeout=self._timeout) as response:
-                    with temp_path.open("wb") as output:
-                        shutil.copyfileobj(response, output)
+                with (
+                    _open_url(spec.model_url, self._timeout) as response,
+                    temp_path.open("wb") as output,
+                ):
+                    shutil.copyfileobj(response, output)
             except OSError as error:
                 raise RuntimeError(
                     f"VADモデルのダウンロードに失敗しました: {spec.model_url}"
@@ -135,7 +139,7 @@ class SenseVoiceModelManager:
                         "VADモデルのSHA256検証に失敗しました。"
                         f" expected={spec.sha256} actual={digest}"
                     )
-            os.replace(temp_path, target_path)
+            temp_path.replace(target_path)
 
     def _download_and_extract(
         self, spec: SenseVoiceModelSpec, target_dir: Path
@@ -145,9 +149,11 @@ class SenseVoiceModelManager:
             temp_dir = Path(temp)
             archive_path = temp_dir / spec.archive_name
             try:
-                with urlopen(spec.archive_url, timeout=self._timeout) as response:
-                    with archive_path.open("wb") as output:
-                        shutil.copyfileobj(response, output)
+                with (
+                    _open_url(spec.archive_url, self._timeout) as response,
+                    archive_path.open("wb") as output,
+                ):
+                    shutil.copyfileobj(response, output)
             except OSError as error:
                 raise RuntimeError(
                     f"SenseVoiceモデルのダウンロードに失敗しました: {spec.archive_url}"
@@ -166,7 +172,8 @@ class SenseVoiceModelManager:
             tokens_file = next(extract_dir.rglob("tokens.txt"), None)
             if model_file is None or tokens_file is None:
                 raise RuntimeError(
-                    "ダウンロードしたSenseVoiceモデルに model または tokens.txt がありません"
+                    "ダウンロードしたSenseVoiceモデルに model または "
+                    "tokens.txt がありません"
                 )
             if target_dir.exists():
                 shutil.rmtree(target_dir)
@@ -176,7 +183,7 @@ class SenseVoiceModelManager:
             staging_dir.mkdir()
             shutil.copy2(model_file, staging_dir / spec.model_name)
             shutil.copy2(tokens_file, staging_dir / "tokens.txt")
-            os.replace(staging_dir, target_dir)
+            staging_dir.replace(target_dir)
 
     def _validate_model_dir(
         self, model_dir: Path, quantization: str
@@ -188,9 +195,17 @@ class SenseVoiceModelManager:
         tokens_path = model_dir / "tokens.txt"
         if not model_path.is_file() or not tokens_path.is_file():
             raise RuntimeError(
-                f"SenseVoiceモデルディレクトリに {model_name} と tokens.txt が必要です: {model_dir}"
+                f"SenseVoiceモデルディレクトリに {model_name} と "
+                f"tokens.txt が必要です: {model_dir}"
             )
         return model_path, tokens_path
+
+
+def _open_url(url: str, timeout: float) -> IO[bytes]:
+    """Open a model download URL; only https is permitted."""
+    if urlparse(url).scheme != "https":
+        raise RuntimeError(f"モデルの取得はhttpsのみ許可します: {url}")
+    return cast("IO[bytes]", urlopen(url, timeout=timeout))  # noqa: S310 -- 固定リリースURLでhttps検証済み
 
 
 def _sha256(path: Path) -> str:
@@ -207,4 +222,4 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
             member_path = (destination / member.name).resolve()
             if destination.resolve() not in member_path.parents:
                 raise RuntimeError("モデルアーカイブに不正なパスが含まれています")
-        archive.extractall(destination)
+        archive.extractall(destination, filter="data")
