@@ -13,7 +13,7 @@
 
 ## クイックスタート
 
-必要なもの: Python 3.10以上と [uv](https://docs.astral.sh/uv/)。
+必要なもの: Python 3.11以上と [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 # インストール（faster-whisperバックエンド）
