@@ -16,7 +16,7 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev --extra sensevoice
       - run: uv run --no-sync ruff format --check .
@@ -24,7 +24,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev --extra sensevoice
       - run: uv run --no-sync ruff check .
@@ -32,7 +32,7 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev --extra sensevoice
       - run: uv run --no-sync mypy src/podcastpreprocessor
@@ -48,7 +48,7 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev --extra sensevoice --python ${{ matrix.python-version }}
       - run: uv run --no-sync pytest
@@ -57,7 +57,7 @@ jobs:
     # 宣言した依存だけで wheel が動き、未宣言の直接依存が無いことの確認。
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv build
       - run: |
@@ -69,7 +69,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v4
       - run: uv export --extra dev --extra sensevoice --no-emit-project --format requirements-txt --output-file /tmp/requirements.txt
       - run: uvx pip-audit --disable-pip -r /tmp/requirements.txt
