@@ -293,7 +293,7 @@ def segment_raw(
         return [
             RefinedSegment(
                 f"{source.id}_0",
-                1,
+                track_index,
                 source.start,
                 source.end,
                 text,
