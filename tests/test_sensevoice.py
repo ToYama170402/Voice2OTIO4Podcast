@@ -4,6 +4,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from podcastpreprocessor.models import AudioInput
 from podcastpreprocessor.sensevoice import (
     SenseVoiceTranscriber,
     _detect_sherpa_speech_regions,
@@ -64,7 +65,7 @@ def test_sensevoice_transcribes_timestamped_text(
     _install_sherpa_mocks(monkeypatch, result)
 
     transcriber = SenseVoiceTranscriber()
-    results = transcriber.transcribe_sources(["episode.wav"])
+    results = transcriber.transcribe_sources([AudioInput("episode.wav")])
 
     segments = results[0][2]
     assert results[0][0] == "source_1"
@@ -88,7 +89,8 @@ def test_sensevoice_reports_prepare_phase_before_reading_audio(
     phases: list[tuple[str, str]] = []
 
     SenseVoiceTranscriber().transcribe_sources(
-        ["episode.wav"], phase_callback=lambda *values: phases.append(values)
+        [AudioInput("episode.wav")],
+        phase_callback=lambda *values: phases.append(values),
     )
 
     assert phases == [("episode.wav", "読み込み・リサンプリング")]

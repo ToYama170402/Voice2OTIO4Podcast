@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .models import RawSegment, WordTimestamp
+from .models import AudioInput, RawSegment, WordTimestamp
 from .transcriber import (
     PhaseCallback,
     ProgressCallback,
@@ -132,27 +132,32 @@ def save_cached(
 
 def transcribe_sources_cached(
     build_transcriber: Callable[[], Transcriber],
-    audio_paths: Sequence[str],
+    audio_inputs: Sequence[AudioInput],
     settings: Mapping[str, object],
     cache_dir: Path | None,
     progress_callback: ProgressCallback | None = None,
     phase_callback: PhaseCallback | None = None,
     on_cache_hit: Callable[[str], None] | None = None,
 ) -> list[TranscriptionResult]:
-    """Transcribe each file, reusing cached results whenever possible.
+    """Transcribe each input, reusing cached results whenever possible.
 
     The transcriber is built lazily on the first cache miss, so a fully
-    cached run never loads a model. Each file is saved to the cache as
+    cached run never loads a model. Each input is saved to the cache as
     soon as its transcription finishes, before any later stage runs.
     """
     results: list[TranscriptionResult] = []
     transcriber: Transcriber | None = None
-    for index, audio_path in enumerate(audio_paths, start=1):
+    for index, spec in enumerate(audio_inputs, start=1):
+        audio_path = spec.path
         source_id = f"source_{index}"
         key: str | None = None
         if cache_dir is not None:
             try:
-                key = cache_key(audio_path, settings)
+                key_settings: Mapping[str, object] = settings
+                if spec.stream_index:
+                    # Stream 0 keeps the historical key so caches stay valid.
+                    key_settings = {**settings, "stream_index": spec.stream_index}
+                key = cache_key(audio_path, key_settings)
             except OSError:
                 key = None
         if key is not None and cache_dir is not None:
@@ -168,7 +173,7 @@ def transcribe_sources_cached(
         if transcriber is None:
             transcriber = build_transcriber()
         transcribed = transcriber.transcribe_sources(
-            [audio_path],
+            [spec],
             progress_callback=progress_callback,
             phase_callback=phase_callback,
         )

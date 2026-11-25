@@ -4,9 +4,52 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from podcastpreprocessor.audio_io import prepare_audio
+from podcastpreprocessor.audio_io import (
+    _file_key,
+    list_audio_streams,
+    prepare_audio,
+)
 
 SR = 44100
+
+
+def write_two_stream_mka(
+    path: Path, freq_a: float = 200.0, freq_b: float = 600.0, seconds: float = 1.0
+) -> Path:
+    """Write a Matroska file holding two stereo FLAC audio streams."""
+    import av
+
+    rate = 48000
+    total = int(rate * seconds)
+    container = av.open(str(path), "w")
+    streams = [container.add_stream("flac", rate=rate) for _ in (freq_a, freq_b)]
+    for stream, freq in zip(streams, (freq_a, freq_b), strict=True):
+        done = 0
+        while done < total:
+            count = min(4096, total - done)
+            t = np.arange(done, done + count) / rate
+            mono = (np.sin(2 * np.pi * freq * t) * 12000).astype(np.int16)
+            interleaved = np.empty(count * 2, dtype=np.int16)
+            interleaved[0::2] = mono
+            interleaved[1::2] = mono
+            frame = av.AudioFrame(format="s16", layout="stereo", samples=count)
+            frame.sample_rate = rate
+            frame.pts = done
+            frame.planes[0].update(interleaved.tobytes())
+            for packet in stream.encode(frame):
+                container.mux(packet)
+            done += count
+        for packet in stream.encode(None):
+            container.mux(packet)
+    container.close()
+    return path
+
+
+def _dominant_frequency(path: str) -> float:
+    data, samplerate = sf.read(path)
+    spectrum = np.abs(np.fft.rfft(data))
+    freqs = np.fft.rfftfreq(len(data), 1 / samplerate)
+    return float(freqs[int(np.argmax(spectrum))])
 
 
 def _write_wav(
@@ -127,3 +170,40 @@ def test_prepare_restarts_when_partial_is_inconsistent(tmp_path: Path) -> None:
     info = sf.info(prepared)
     assert info.samplerate == 16000
     assert abs(info.duration - 1.2) < 0.05
+
+
+def test_list_audio_streams_reports_each_track(tmp_path: Path) -> None:
+    source = write_two_stream_mka(tmp_path / "two.mka")
+
+    streams = list_audio_streams(str(source))
+
+    assert [(s.stream_index, s.channels, s.sample_rate) for s in streams] == [
+        (0, 2, 48000),
+        (1, 2, 48000),
+    ]
+
+
+def test_prepare_audio_decodes_the_requested_stream(tmp_path: Path) -> None:
+    source = write_two_stream_mka(tmp_path / "two.mka")
+    cache = tmp_path / "converted"
+
+    first = prepare_audio(str(source), cache_dir=cache, stream_index=0)
+    second = prepare_audio(str(source), cache_dir=cache, stream_index=1)
+
+    assert first != second
+    assert _dominant_frequency(first) == pytest.approx(200.0, abs=5.0)
+    assert _dominant_frequency(second) == pytest.approx(600.0, abs=5.0)
+
+
+def test_stream_zero_keeps_the_historical_cache_key(tmp_path: Path) -> None:
+    source = write_two_stream_mka(tmp_path / "two.mka")
+
+    assert _file_key(str(source)) == _file_key(str(source), 0)
+    assert _file_key(str(source), 1) != _file_key(str(source), 0)
+
+
+def test_prepare_audio_rejects_a_missing_stream(tmp_path: Path) -> None:
+    source = write_two_stream_mka(tmp_path / "two.mka")
+
+    with pytest.raises(RuntimeError, match="audio stream 2 not found"):
+        prepare_audio(str(source), cache_dir=tmp_path / "c", stream_index=2)

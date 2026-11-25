@@ -142,12 +142,56 @@ class ProcessedSegment:
 
 
 @dataclass(frozen=True)
+class AudioInput:
+    """One transcription input: a file and one audio stream inside it.
+
+    A file can hold several audio streams (tracks); each stream is
+    processed as its own source. ``stream_index`` counts audio streams
+    only, starting at 0.
+    """
+
+    path: str
+    stream_index: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.path:
+            raise ValueError("path must not be empty")
+        if self.stream_index < 0:
+            raise ValueError("stream_index must be non-negative")
+
+
+def as_audio_input(value: AudioInput | str) -> AudioInput:
+    """Coerce a plain path to an AudioInput for the first audio stream."""
+    return value if isinstance(value, AudioInput) else AudioInput(str(value))
+
+
+@dataclass(frozen=True)
+class AudioStreamInfo:
+    """Facts about one audio stream inside a media file."""
+
+    stream_index: int
+    channels: int
+    sample_rate: int
+
+    def __post_init__(self) -> None:
+        if self.stream_index < 0:
+            raise ValueError("stream_index must be non-negative")
+        if self.channels < 0:
+            raise ValueError("channels must be non-negative")
+        if self.sample_rate < 0:
+            raise ValueError("sample_rate must be non-negative")
+
+
+@dataclass(frozen=True)
 class AudioSource:
     source_id: str
     path: str
     track_index: int
     duration_frames: int
     name: str = ""
+    stream_index: int = 0
+    stream_count: int = 1
+    channels: int = 0
 
     def __post_init__(self) -> None:
         if not self.source_id:
@@ -158,6 +202,14 @@ class AudioSource:
             raise ValueError("track_index must be positive")
         if self.duration_frames <= 0:
             raise ValueError("duration_frames must be positive")
+        if self.stream_count <= 0:
+            raise ValueError("stream_count must be positive")
+        if not 0 <= self.stream_index < self.stream_count:
+            raise ValueError(
+                "stream_index must satisfy 0 <= stream_index < stream_count"
+            )
+        if self.channels < 0:
+            raise ValueError("channels must be non-negative")
 
 
 @dataclass(frozen=True)

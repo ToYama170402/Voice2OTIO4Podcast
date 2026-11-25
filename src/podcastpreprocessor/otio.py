@@ -14,6 +14,29 @@ def _metadata(link_group_id: int, **extra: object) -> dict[str, object]:
     return {"Resolve_OTIO": resolve}
 
 
+def _with_channels(
+    metadata: dict[str, object], source: AudioSource
+) -> dict[str, object]:
+    """Route a clip to its audio stream of a multi-stream file.
+
+    DaVinci Resolve identifies which audio stream of a file a clip
+    plays through ``Resolve_OTIO.Channels``: one entry per channel of
+    the stream, each carrying the stream's ``Source Track ID`` (the
+    audio-stream index inside the file). Single-stream files need no
+    routing and keep their historical metadata shape.
+    """
+    if source.stream_count <= 1:
+        return metadata
+    channels = [
+        {"Source Channel ID": channel, "Source Track ID": source.stream_index}
+        for channel in range(source.channels or 2)
+    ]
+    resolve = metadata.get("Resolve_OTIO")
+    merged: dict[str, object] = dict(resolve) if isinstance(resolve, dict) else {}
+    merged["Channels"] = channels
+    return {**metadata, "Resolve_OTIO": merged}
+
+
 def _clip(
     name: str,
     start_frame: int,
@@ -219,7 +242,12 @@ def generate_otio(
                 fps,
                 link_group_id,
                 reference,
-                (_metadata(link_group_id) if link_group_id else {"source_slice": True}),
+                _with_channels(
+                    _metadata(link_group_id)
+                    if link_group_id
+                    else {"source_slice": True},
+                    source,
+                ),
             )
             if matched is not None:
                 for marker in matched.clip_markers:

@@ -9,7 +9,7 @@ from typing import Any
 
 from .audio_io import TARGET_SAMPLE_RATE, prepare_audio
 from .model_manager import SenseVoiceModelManager
-from .models import RawSegment, WordTimestamp
+from .models import AudioInput, RawSegment, WordTimestamp, as_audio_input
 from .transcriber import PhaseCallback, ProgressCallback, TranscriptionResult
 from .transcript_cache import ChunkCache, cache_key
 from .vad import speech_segments_to_regions, vad_model_config
@@ -106,38 +106,40 @@ class SenseVoiceTranscriber:
         self._transcript_cache_dir = transcript_cache_dir
 
     def transcribe(
-        self, audio_path: str, source_id: str = "source_1"
+        self, audio: AudioInput | str, source_id: str = "source_1"
     ) -> list[RawSegment]:
-        return self._transcribe_one(audio_path, source_id)[0]
+        return self._transcribe_one(as_audio_input(audio), source_id)[0]
 
     def transcribe_sources(
         self,
-        audio_paths: list[str],
+        audio_inputs: list[AudioInput],
         progress_callback: ProgressCallback | None = None,
         phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]:
         results: list[TranscriptionResult] = []
-        for index, audio_path in enumerate(audio_paths, start=1):
+        for index, spec in enumerate(audio_inputs, start=1):
             source_id = f"source_{index}"
             segments, duration = self._transcribe_one(
-                audio_path, source_id, progress_callback, phase_callback
+                spec, source_id, progress_callback, phase_callback
             )
-            results.append((source_id, audio_path, segments, duration))
+            results.append((source_id, spec.path, segments, duration))
         return results
 
     def _transcribe_one(
         self,
-        audio_path: str,
+        spec: AudioInput,
         source_id: str,
         progress_callback: ProgressCallback | None = None,
         phase_callback: PhaseCallback | None = None,
     ) -> tuple[list[RawSegment], float]:
+        audio_path = spec.path
         if phase_callback is not None:
             phase_callback(audio_path, "読み込み・リサンプリング")
         prepared_path = prepare_audio(
             audio_path,
             cache_dir=Path(self._audio_cache_dir) if self._audio_cache_dir else None,
             soundfile_module=self._soundfile,
+            stream_index=spec.stream_index,
         )
         audio, sample_rate = self._soundfile.read(
             prepared_path, dtype="float32", always_2d=True
@@ -154,7 +156,7 @@ class SenseVoiceTranscriber:
         # Build the full chunk plan first: chunk indices are the chunk
         # cache keys, so they must be stable across runs.
         plan = self._chunk_plan(regions, chunk_samples)
-        chunk_cache, cached_chunks = self._open_chunk_cache(audio_path)
+        chunk_cache, cached_chunks = self._open_chunk_cache(spec)
         segments: list[RawSegment] = []
         if progress_callback is not None:
             progress_callback(audio_path, 0.0, duration)
@@ -222,12 +224,16 @@ class SenseVoiceTranscriber:
         return plan
 
     def _open_chunk_cache(
-        self, audio_path: str
+        self, spec: AudioInput
     ) -> tuple[ChunkCache | None, dict[int, RawSegment | None]]:
         if self._transcript_cache_dir is None:
             return None, {}
         try:
-            key = cache_key(audio_path, self._chunk_settings())
+            settings = self._chunk_settings()
+            if spec.stream_index:
+                # Stream 0 keeps the historical key so journals stay valid.
+                settings["stream_index"] = spec.stream_index
+            key = cache_key(spec.path, settings)
             chunk_cache = ChunkCache(
                 Path(self._transcript_cache_dir) / "partials" / f"{key}.jsonl"
             )

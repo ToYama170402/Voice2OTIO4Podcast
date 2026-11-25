@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from podcastpreprocessor.filler_detector import detect_candidates
 
@@ -304,3 +305,23 @@ def test_token_filler_regions_sorts_and_joins_multi_char_fillers() -> None:
     )
     regions = token_filler_regions([with_empty])
     assert [(r.start, r.end) for r in regions] == [(0.1, 0.4)]
+
+
+def test_decode_audio_mono_decodes_the_requested_stream(tmp_path) -> None:
+    import numpy as np
+
+    from podcastpreprocessor.filler_detector import decode_audio_mono
+    from test_audio_io import write_two_stream_mka
+
+    source = write_two_stream_mka(tmp_path / "two.mka")
+
+    def dominant(stream_index: int) -> float:
+        samples, samplerate = decode_audio_mono(str(source), stream_index)
+        spectrum = np.abs(np.fft.rfft(samples))
+        freqs = np.fft.rfftfreq(len(samples), 1 / samplerate)
+        return float(freqs[int(np.argmax(spectrum))])
+
+    assert dominant(0) == pytest.approx(200.0, abs=5.0)
+    assert dominant(1) == pytest.approx(600.0, abs=5.0)
+    with pytest.raises(RuntimeError, match="audio stream 2 not found"):
+        decode_audio_mono(str(source), 2)
