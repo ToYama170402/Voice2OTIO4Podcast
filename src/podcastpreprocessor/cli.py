@@ -4,13 +4,56 @@ import argparse
 import sys
 from pathlib import Path
 
+from .audio_io import list_audio_streams
 from .factory import build_transcriber
 from .filler_detector import FillerRegion, detect_filler_candidates
-from .models import AudioSource, RawSegment, seconds_to_frame
+from .models import (
+    AudioInput,
+    AudioSource,
+    AudioStreamInfo,
+    RawSegment,
+    seconds_to_frame,
+)
 from .pipeline import process_sources
 from .progress import ProgressReporter
 from .transcriber import Transcriber
 from .transcript_cache import default_cache_dir, transcribe_sources_cached
+
+
+def expand_audio_inputs(
+    audio_paths: list[str],
+) -> tuple[list[AudioInput], dict[tuple[str, int], AudioStreamInfo], dict[str, int]]:
+    """Expand input files into one input per audio stream they hold.
+
+    A file with several audio streams (tracks) yields one input per
+    stream, so each track is transcribed and placed on its own OTIO
+    track. Files that cannot be probed stay a single first-stream
+    input, leaving the error to the transcription stage as before.
+    Returns the inputs, per-stream facts, and the stream count of
+    each probed file.
+    """
+    inputs: list[AudioInput] = []
+    stream_info: dict[tuple[str, int], AudioStreamInfo] = {}
+    stream_counts: dict[str, int] = {}
+    for audio_path in audio_paths:
+        try:
+            streams = list_audio_streams(audio_path)
+        except Exception:  # noqa: BLE001 -- 探れないファイルは従来どおり単一入力
+            streams = []
+        stream_counts[audio_path] = max(1, len(streams))
+        if len(streams) <= 1:
+            inputs.append(AudioInput(audio_path))
+            if streams:
+                stream_info[(audio_path, 0)] = streams[0]
+            continue
+        sys.stderr.write(
+            f"{Path(audio_path).name}: {len(streams)} audio tracks found; "
+            "processing each track as a separate source\n"
+        )
+        for info in streams:
+            inputs.append(AudioInput(audio_path, info.stream_index))
+            stream_info[(audio_path, info.stream_index)] = info
+    return inputs, stream_info, stream_counts
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,7 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
         "audio",
         nargs="+",
         help="入力音声ファイル（話者ごとに1ファイル。指定順に "
-        "source_1, source_2, ... になります）",
+        "source_1, source_2, ... になります。複数トラックのファイルは"
+        "トラックごとに分かれます）",
     )
     parser.add_argument("output", help="出力するOTIOファイルのパス")
 
@@ -234,7 +278,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        progress = ProgressReporter(sys.stderr, total_files=len(args.audio))
+        inputs, stream_info, stream_counts = expand_audio_inputs(args.audio)
+        progress = ProgressReporter(sys.stderr, total_files=len(inputs))
         settings = {
             "backend": args.backend,
             "model": args.model,
@@ -298,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
 
         transcribed = transcribe_sources_cached(
             _build,
-            args.audio,
+            inputs,
             settings,
             cache_dir,
             progress_callback=progress,
@@ -308,9 +353,10 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as error:
         parser.error(str(error))
     sources: list[tuple[AudioSource, list[RawSegment]]] = []
-    for track_index, (source_id, audio_path, raw_segments, duration) in enumerate(
-        transcribed, start=1
+    for track_index, (spec, result) in enumerate(
+        zip(inputs, transcribed, strict=True), start=1
     ):
+        source_id, audio_path, raw_segments, duration = result
         end_frame = (
             seconds_to_frame(duration, args.fps)
             if duration
@@ -321,15 +367,33 @@ def main(argv: list[str] | None = None) -> int:
         )
         if end_frame <= 0:
             parser.error(f"transcription produced no duration: {audio_path}")
+        info = stream_info.get((spec.path, spec.stream_index))
+        stream_count = stream_counts.get(spec.path, 1)
         sources.append(
-            (AudioSource(source_id, audio_path, track_index, end_frame), raw_segments)
+            (
+                AudioSource(
+                    source_id,
+                    audio_path,
+                    track_index,
+                    end_frame,
+                    name=(
+                        f"{Path(audio_path).stem} トラック{spec.stream_index + 1}"
+                        if stream_count > 1
+                        else ""
+                    ),
+                    stream_index=spec.stream_index,
+                    stream_count=stream_count,
+                    channels=info.channels if info is not None else 0,
+                ),
+                raw_segments,
+            )
         )
     filler_regions: dict[str, list[FillerRegion]] | None = None
     if args.acoustic_fillers:
         try:
             filler_regions = {}
             for source, _raw in sources:
-                regions = detect_filler_candidates(source.path)
+                regions = detect_filler_candidates(source.path, source.stream_index)
                 filler_regions[source.source_id] = regions
                 sys.stderr.write(
                     f"Acoustic filler candidates in "

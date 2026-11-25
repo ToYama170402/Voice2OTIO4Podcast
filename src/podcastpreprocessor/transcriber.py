@@ -3,7 +3,8 @@
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from .models import RawSegment, WordTimestamp
+from .audio_io import prepare_audio
+from .models import AudioInput, RawSegment, WordTimestamp, as_audio_input
 
 ProgressCallback = Callable[[str, float, float | None], None]
 PhaseCallback = Callable[[str, str], None]
@@ -12,12 +13,12 @@ TranscriptionResult = tuple[str, str, list[RawSegment], float | None]
 
 class Transcriber(Protocol):
     def transcribe(
-        self, audio_path: str, source_id: str = "source_1"
+        self, audio: AudioInput | str, source_id: str = "source_1"
     ) -> list[RawSegment]: ...
 
     def transcribe_sources(
         self,
-        audio_paths: list[str],
+        audio_inputs: list[AudioInput],
         progress_callback: ProgressCallback | None = None,
         phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]: ...
@@ -56,11 +57,22 @@ class FasterWhisperTranscriber:
                 ) from error
             raise
 
+    def _decode_path(self, spec: AudioInput) -> str:
+        """Return the path the model should decode for this input.
+
+        faster-whisper decodes the first audio stream of a file itself,
+        so other streams are handed over as prepared per-stream WAVs.
+        """
+        if spec.stream_index == 0:
+            return spec.path
+        return prepare_audio(spec.path, stream_index=spec.stream_index)
+
     def transcribe(
-        self, audio_path: str, source_id: str = "source_1"
+        self, audio: AudioInput | str, source_id: str = "source_1"
     ) -> list[RawSegment]:
+        spec = as_audio_input(audio)
         segments, _info = self._model.transcribe(
-            audio_path,
+            self._decode_path(spec),
             language="ja",
             word_timestamps=True,
         )
@@ -71,18 +83,19 @@ class FasterWhisperTranscriber:
 
     def transcribe_sources(
         self,
-        audio_paths: list[str],
+        audio_inputs: list[AudioInput],
         progress_callback: ProgressCallback | None = None,
         phase_callback: PhaseCallback | None = None,
     ) -> list[TranscriptionResult]:
-        """Transcribe one file per source and retain detected media durations."""
+        """Transcribe one input per source and retain detected durations."""
         results: list[TranscriptionResult] = []
-        for index, audio_path in enumerate(audio_paths, start=1):
+        for index, spec in enumerate(audio_inputs, start=1):
+            audio_path = spec.path
             source_id = f"source_{index}"
             if phase_callback is not None:
                 phase_callback(audio_path, "読み込み")
             segments, info = self._model.transcribe(
-                audio_path,
+                self._decode_path(spec),
                 language="ja",
                 word_timestamps=True,
             )

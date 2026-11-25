@@ -134,7 +134,9 @@ def token_filler_regions(segments: Iterable[RawSegment]) -> list[FillerRegion]:
     return regions
 
 
-def decode_audio_mono(audio_path: str) -> tuple[NDArray[np.float32], int]:
+def decode_audio_mono(
+    audio_path: str, stream_index: int = 0
+) -> tuple[NDArray[np.float32], int]:
     """Decode any supported audio file to mono float32 at 16 kHz (PyAV)."""
     try:
         import av
@@ -144,9 +146,15 @@ def decode_audio_mono(audio_path: str) -> tuple[NDArray[np.float32], int]:
             "faster-whisper); install project dependencies first"
         ) from error
     container = av.open(audio_path)
-    stream = next((s for s in container.streams if s.type == "audio"), None)
-    if stream is None:
+    audio_streams = [s for s in container.streams if s.type == "audio"]
+    if not audio_streams:
         raise RuntimeError(f"no audio stream found: {audio_path}")
+    if not 0 <= stream_index < len(audio_streams):
+        raise RuntimeError(
+            f"audio stream {stream_index} not found in {audio_path}: "
+            f"the file has {len(audio_streams)} audio stream(s)"
+        )
+    stream = audio_streams[stream_index]
     resampler = av.AudioResampler(format="fltp", layout="mono", rate=TARGET_SAMPLE_RATE)
     chunks: list[NDArray[Any]] = []  # PyAVのto_ndarrayはdtypeが緩い
     for frame in container.decode(stream):
@@ -302,7 +310,9 @@ def detect_candidates(
     return regions
 
 
-def detect_filler_candidates(audio_path: str) -> list[FillerRegion]:
+def detect_filler_candidates(
+    audio_path: str, stream_index: int = 0
+) -> list[FillerRegion]:
     """Decode an audio file and detect acoustic filler candidates."""
-    samples, sample_rate = decode_audio_mono(audio_path)
+    samples, sample_rate = decode_audio_mono(audio_path, stream_index)
     return detect_candidates(samples, sample_rate)

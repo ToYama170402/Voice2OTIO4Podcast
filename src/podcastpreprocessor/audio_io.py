@@ -19,7 +19,31 @@ import os
 from pathlib import Path
 from typing import IO, Any
 
+from .models import AudioStreamInfo
+
 TARGET_SAMPLE_RATE = 16000
+
+
+def list_audio_streams(audio_path: str) -> list[AudioStreamInfo]:
+    """List the audio streams (tracks) inside a media file, in order."""
+    try:
+        import av
+    except ImportError as error:
+        raise RuntimeError(
+            "audio stream probing requires PyAV; install project dependencies first"
+        ) from error
+    container = av.open(audio_path)
+    try:
+        return [
+            AudioStreamInfo(
+                stream_index=index,
+                channels=int(stream.codec_context.channels or 0),
+                sample_rate=int(stream.codec_context.sample_rate or 0),
+            )
+            for index, stream in enumerate(container.streams.audio)
+        ]
+    finally:
+        container.close()
 
 
 def default_converted_dir() -> Path:
@@ -27,14 +51,17 @@ def default_converted_dir() -> Path:
     return Path(base) / "podcastpreprocessor" / "converted"
 
 
-def _file_key(audio_path: str) -> str:
+def _file_key(audio_path: str, stream_index: int = 0) -> str:
     stat = Path(audio_path).stat()
-    payload = {
+    payload: dict[str, object] = {
         "path": str(Path(audio_path).resolve()),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
         "target": TARGET_SAMPLE_RATE,
     }
+    if stream_index:
+        # Stream 0 keeps the historical key so existing caches stay valid.
+        payload["stream"] = stream_index
     canonical = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -120,12 +147,20 @@ def _wrap_pcm_as_wav(partial: Path, dest_path: Path, sf: Any) -> None:
     temporary.replace(dest_path)
 
 
-def _audio_stream_or_raise(container: Any, audio_path: str) -> Any:
-    stream = next((s for s in container.streams if s.type == "audio"), None)
-    if stream is None:
+def _audio_stream_or_raise(
+    container: Any, audio_path: str, stream_index: int = 0
+) -> Any:
+    audio_streams = [s for s in container.streams if s.type == "audio"]
+    if not audio_streams:
         container.close()
         raise RuntimeError(f"no audio stream found: {audio_path}")
-    return stream
+    if not 0 <= stream_index < len(audio_streams):
+        container.close()
+        raise RuntimeError(
+            f"audio stream {stream_index} not found in {audio_path}: "
+            f"the file has {len(audio_streams)} audio stream(s)"
+        )
+    return audio_streams[stream_index]
 
 
 def _seek_to_resume(container: Any, stream: Any, resume_time: float) -> bool:
@@ -206,7 +241,7 @@ class _ResampleSink:
             self._since_journal = 0
 
 
-def convert_to_wav16k(audio_path: str, dest_path: Path) -> None:
+def convert_to_wav16k(audio_path: str, dest_path: Path, stream_index: int = 0) -> None:
     """Stream-decode and resample any audio file to a 16 kHz mono WAV.
 
     The conversion is resumable: resampled PCM is appended to a partial
@@ -228,12 +263,12 @@ def convert_to_wav16k(audio_path: str, dest_path: Path) -> None:
     resume_time = written / TARGET_SAMPLE_RATE
 
     container = av.open(audio_path)
-    stream = _audio_stream_or_raise(container, audio_path)
+    stream = _audio_stream_or_raise(container, audio_path, stream_index)
     if written and not _seek_to_resume(container, stream, resume_time):
         # The container cannot seek; restart the conversion cleanly.
         container.close()
         container = av.open(audio_path)
-        stream = _audio_stream_or_raise(container, audio_path)
+        stream = _audio_stream_or_raise(container, audio_path, stream_index)
         written = 0
         resume_time = 0.0
     resampler = av.AudioResampler(format="s16", layout="mono", rate=TARGET_SAMPLE_RATE)
@@ -258,23 +293,27 @@ def prepare_audio(
     audio_path: str,
     cache_dir: Path | None = None,
     soundfile_module: Any = None,
+    stream_index: int = 0,
 ) -> str:
     """Return a path to a 16 kHz mono WAV version of the input.
 
     Files that are already readable 16 kHz mono audio are returned
     unchanged. Anything else is converted once and cached under
     ``cache_dir`` (default: ~/.cache/podcastpreprocessor/converted).
+    A ``stream_index`` above 0 always converts: the fast path can only
+    ever describe the file's first (or only) audio stream.
     """
-    if soundfile_module is None:
-        try:
-            import soundfile
-        except ImportError:
+    if stream_index == 0:
+        if soundfile_module is None:
+            try:
+                import soundfile
+            except ImportError:
+                return audio_path
+            soundfile_module = soundfile
+        if not _needs_conversion(audio_path, soundfile_module):
             return audio_path
-        soundfile_module = soundfile
-    if not _needs_conversion(audio_path, soundfile_module):
-        return audio_path
     directory = cache_dir if cache_dir is not None else default_converted_dir()
-    dest = directory / f"{_file_key(audio_path)}.wav"
+    dest = directory / f"{_file_key(audio_path, stream_index)}.wav"
     if not dest.exists():
-        convert_to_wav16k(audio_path, dest)
+        convert_to_wav16k(audio_path, dest, stream_index)
     return str(dest)

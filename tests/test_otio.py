@@ -84,3 +84,48 @@ def test_generate_otio_builds_tracks_links_and_audio_reference(tmp_path) -> None
     write_otio(str(output_path), segments, [source])
     reloaded = otio.adapters.read_from_file(str(output_path))
     assert reloaded.name == "Podcast_Timeline"
+
+
+def test_generate_otio_routes_clips_to_their_stream_of_a_multi_track_file() -> None:
+    segments = [
+        ProcessedSegment("s1", 2, 0, 30, 0, 30, "2番目のマイク", source_id="speaker_b")
+    ]
+    source = AudioSource(
+        "speaker_b",
+        "C:/audio/output.mkv",
+        2,
+        30,
+        stream_index=1,
+        stream_count=2,
+        channels=2,
+    )
+
+    timeline = generate_otio(segments, [source], fps=30)
+
+    audio_track = timeline.tracks[2]
+    assert audio_track.name == "speaker_b 音声トラック"
+    routed = [
+        [dict(entry) for entry in clip.metadata["Resolve_OTIO"]["Channels"]]
+        for clip in audio_track
+        if isinstance(clip, otio.schema.Clip)
+    ]
+    assert routed
+    assert all(
+        channels
+        == [
+            {"Source Channel ID": 0, "Source Track ID": 1},
+            {"Source Channel ID": 1, "Source Track ID": 1},
+        ]
+        for channels in routed
+    )
+
+
+def test_generate_otio_omits_channels_for_single_stream_files() -> None:
+    segments = [ProcessedSegment("s1", 1, 0, 30, 0, 30, "通常", source_id="speaker_a")]
+    source = AudioSource("speaker_a", "C:/audio/speaker_a.wav", 1, 30)
+
+    timeline = generate_otio(segments, [source], fps=30)
+
+    for clip in timeline.tracks[2]:
+        if isinstance(clip, otio.schema.Clip):
+            assert "Channels" not in clip.metadata.get("Resolve_OTIO", {})

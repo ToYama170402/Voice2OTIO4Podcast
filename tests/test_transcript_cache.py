@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from podcastpreprocessor.models import RawSegment, WordTimestamp
+from podcastpreprocessor.models import AudioInput, RawSegment, WordTimestamp
 from podcastpreprocessor.transcript_cache import (
     cache_key,
     load_cached,
@@ -70,12 +70,12 @@ class _FakeTranscriber:
         self.calls: list[str] = []
 
     def transcribe_sources(
-        self, audio_paths, progress_callback=None, phase_callback=None
+        self, audio_inputs, progress_callback=None, phase_callback=None
     ):
-        self.calls.extend(audio_paths)
+        self.calls.extend(spec.path for spec in audio_inputs)
         return [
-            (f"source_{i}", path, [_segment()], 30.0)
-            for i, path in enumerate(audio_paths, start=1)
+            (f"source_{i}", spec.path, [_segment()], 30.0)
+            for i, spec in enumerate(audio_inputs, start=1)
         ]
 
 
@@ -92,7 +92,7 @@ def test_transcribe_sources_cached_resumes_after_failure(tmp_path: Path) -> None
 
     # First run: transcribes both files and caches them.
     results = transcribe_sources_cached(
-        build, [str(first), str(second)], SETTINGS, tmp_path
+        build, [AudioInput(str(first)), AudioInput(str(second))], SETTINGS, tmp_path
     )
     assert [item[0] for item in results] == ["source_1", "source_2"]
     assert fake.calls == [str(first), str(second)]
@@ -104,7 +104,7 @@ def test_transcribe_sources_cached_resumes_after_failure(tmp_path: Path) -> None
     hits: list[str] = []
     results = transcribe_sources_cached(
         build,
-        [str(first), str(second)],
+        [AudioInput(str(first)), AudioInput(str(second))],
         SETTINGS,
         tmp_path,
         on_cache_hit=hits.append,
@@ -118,7 +118,9 @@ def test_transcribe_sources_cached_resumes_after_failure(tmp_path: Path) -> None
 def test_transcribe_sources_cached_without_cache_dir(tmp_path: Path) -> None:
     audio = _audio(tmp_path)
     fake = _FakeTranscriber()
-    results = transcribe_sources_cached(lambda: fake, [str(audio)], SETTINGS, None)
+    results = transcribe_sources_cached(
+        lambda: fake, [AudioInput(str(audio))], SETTINGS, None
+    )
     assert fake.calls == [str(audio)]
     assert results[0][2][0].text == "えーと、今日は"
 
@@ -218,7 +220,7 @@ def test_transcribe_sources_cached_miss_side_effects(tmp_path: Path) -> None:
 
     results = transcribe_sources_cached(
         lambda: fake,
-        [str(first), str(second)],
+        [AudioInput(str(first)), AudioInput(str(second))],
         SETTINGS,
         tmp_path,
         phase_callback=phase_callback,
@@ -243,7 +245,7 @@ def test_transcribe_sources_cached_hit_reports_progress(tmp_path: Path) -> None:
 
     results = transcribe_sources_cached(
         build,
-        [str(audio)],
+        [AudioInput(str(audio))],
         SETTINGS,
         tmp_path,
         progress_callback=lambda *args: progress.append(args),
@@ -258,7 +260,7 @@ def test_transcribe_sources_cached_tolerates_missing_audio(tmp_path: Path) -> No
     fake = _FakeTranscriber()
 
     results = transcribe_sources_cached(
-        lambda: fake, [str(missing)], SETTINGS, tmp_path
+        lambda: fake, [AudioInput(str(missing))], SETTINGS, tmp_path
     )
 
     assert fake.calls == [str(missing)]
@@ -296,3 +298,46 @@ def test_chunk_cache_later_line_wins_and_clear_is_idempotent(
         "end": 1.8,
         "probability": 0.9,
     }
+
+
+class _PerStreamTranscriber:
+    """Fake backend whose transcript text identifies the stream."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def transcribe_sources(
+        self, audio_inputs, progress_callback=None, phase_callback=None
+    ):
+        results = []
+        for index, spec in enumerate(audio_inputs, start=1):
+            self.calls.append((spec.path, spec.stream_index))
+            segment = _segment()
+            segment.text = f"stream {spec.stream_index}"
+            results.append((f"source_{index}", spec.path, [segment], 30.0))
+        return results
+
+
+def test_transcribe_sources_cached_separates_streams_of_one_file(
+    tmp_path: Path,
+) -> None:
+    audio = _audio(tmp_path)
+    cache_dir = tmp_path / "cache"
+    fake = _PerStreamTranscriber()
+    builds: list[int] = []
+
+    def build() -> _PerStreamTranscriber:
+        builds.append(1)
+        return fake
+
+    inputs = [AudioInput(str(audio), 0), AudioInput(str(audio), 1)]
+    results = transcribe_sources_cached(build, inputs, SETTINGS, cache_dir)
+
+    assert [result[2][0].text for result in results] == ["stream 0", "stream 1"]
+    assert fake.calls == [(str(audio), 0), (str(audio), 1)]
+    assert len(list(cache_dir.glob("*.json"))) == 2
+
+    again = transcribe_sources_cached(build, inputs, SETTINGS, cache_dir)
+
+    assert builds == [1]
+    assert [result[2][0].text for result in again] == ["stream 0", "stream 1"]

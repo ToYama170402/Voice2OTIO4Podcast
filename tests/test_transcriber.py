@@ -3,6 +3,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from podcastpreprocessor.models import AudioInput
 from podcastpreprocessor.transcriber import FasterWhisperTranscriber
 
 
@@ -50,7 +51,8 @@ def test_transcribe_sources_reports_progress(monkeypatch: pytest.MonkeyPatch) ->
 
     transcriber = FasterWhisperTranscriber()
     results = transcriber.transcribe_sources(
-        ["episode.wav"], progress_callback=lambda *values: progress.append(values)
+        [AudioInput("episode.wav")],
+        progress_callback=lambda *values: progress.append(values),
     )
 
     assert len(results[0][2]) == 2
@@ -80,7 +82,8 @@ def test_transcribe_sources_reports_prepare_phase(
     phases: list[tuple[str, str]] = []
 
     FasterWhisperTranscriber().transcribe_sources(
-        ["episode.wav"], phase_callback=lambda *values: phases.append(values)
+        [AudioInput("episode.wav")],
+        phase_callback=lambda *values: phases.append(values),
     )
 
     assert phases == [("episode.wav", "読み込み")]
